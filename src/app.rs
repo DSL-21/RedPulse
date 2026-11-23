@@ -20,6 +20,8 @@ enum Tab {
     About,
 }
 
+const MAX_UI_SAMPLES: usize = 20_000;
+
 pub struct RedPulseApp {
     tab: Tab,
     target: String,
@@ -30,13 +32,20 @@ pub struct RedPulseApp {
     timeout: u64,
     body: String,
     running: Option<TestHandle>,
-    samples: Vec<Sample>,
+    samples: VecDeque<Sample>,
     recent_latencies: VecDeque<(f64, f64)>,
     started: Option<Instant>,
     elapsed_seconds: f64,
     status: String,
     error: Option<String>,
     last_export: Option<String>,
+    total_received: u64,
+    total_success: u64,
+    total_client_errors: u64,
+    total_server_errors: u64,
+    total_network_errors: u64,
+    latency_sum_ms: f64,
+    histogram: Histogram<u64>,
 }
 
 impl RedPulseApp {
@@ -55,20 +64,38 @@ impl RedPulseApp {
             timeout: 10,
             body: r#"{ "ping": "redpulse" }"#.into(),
             running: None,
-            samples: Vec::new(),
+            samples: VecDeque::new(),
             recent_latencies: VecDeque::new(),
             started: None,
             elapsed_seconds: 0.0,
             status: "Ready".into(),
             error: None,
             last_export: None,
+            total_received: 0,
+            total_success: 0,
+            total_client_errors: 0,
+            total_server_errors: 0,
+            total_network_errors: 0,
+            latency_sum_ms: 0.0,
+            histogram: Histogram::<u64>::new(3).expect("valid histogram configuration"),
         }
     }
 
-    fn start_test(&mut self) {
+    fn reset_results(&mut self) {
         self.samples.clear();
         self.recent_latencies.clear();
+        self.total_received = 0;
+        self.total_success = 0;
+        self.total_client_errors = 0;
+        self.total_server_errors = 0;
+        self.total_network_errors = 0;
+        self.latency_sum_ms = 0.0;
+        self.histogram.reset();
         self.elapsed_seconds = 0.0;
+    }
+
+    fn start_test(&mut self) {
+        self.reset_results();
         self.error = None;
         self.last_export = None;
 
@@ -99,22 +126,43 @@ impl RedPulseApp {
         }
     }
 
+    fn record_sample(&mut self, sample: Sample) {
+        self.total_received += 1;
+        if sample.status >= 200 && sample.status < 400 {
+            self.total_success += 1;
+        } else if sample.status >= 400 && sample.status < 500 {
+            self.total_client_errors += 1;
+        } else if sample.status >= 500 {
+            self.total_server_errors += 1;
+        } else if sample.status == 0 {
+            self.total_network_errors += 1;
+        }
+
+        self.latency_sum_ms += sample.latency_ms;
+        let micros = (sample.latency_ms * 1000.0).max(1.0) as u64;
+        let _ = self.histogram.record(micros.min(60_000_000));
+
+        self.recent_latencies.push_back((
+            sample.elapsed_ms as f64 / 1000.0,
+            sample.latency_ms,
+        ));
+        while self.recent_latencies.len() > 600 {
+            self.recent_latencies.pop_front();
+        }
+
+        if self.samples.len() == MAX_UI_SAMPLES {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(sample);
+    }
+
     fn poll_engine(&mut self) {
         let mut finished = false;
         if let Some(handle) = &self.running {
             while let Ok(event) = handle.rx.try_recv() {
                 match event {
                     EngineEvent::Started => self.status = "Running".into(),
-                    EngineEvent::Sample(sample) => {
-                        self.recent_latencies.push_back((
-                            sample.elapsed_ms as f64 / 1000.0,
-                            sample.latency_ms,
-                        ));
-                        while self.recent_latencies.len() > 600 {
-                            self.recent_latencies.pop_front();
-                        }
-                        self.samples.push(sample);
-                    }
+                    EngineEvent::Sample(sample) => self.record_sample(sample),
                     EngineEvent::Finished { stopped } => {
                         self.status = if stopped { "Stopped".into() } else { "Completed".into() };
                         finished = true;
@@ -140,40 +188,25 @@ impl RedPulseApp {
         }
     }
 
-    fn metrics(&self) -> (usize, usize, usize, usize, f64, f64, f64, f64) {
-        let total = self.samples.len();
-        let ok = self.samples.iter().filter(|sample| {
-            (200..400).contains(&sample.status)
-        }).count();
-        let client = self.samples.iter().filter(|sample| {
-            (400..500).contains(&sample.status)
-        }).count();
-        let other = self.samples.iter().filter(|sample| {
-            sample.status >= 500 || sample.status == 0
-        }).count();
-
-        let avg = if total > 0 {
-            self.samples.iter().map(|sample| sample.latency_ms).sum::<f64>() / total as f64
-        } else {
-            0.0
-        };
-
-        let mut histogram = Histogram::<u64>::new(3).unwrap();
-        for sample in &self.samples {
-            let micros = (sample.latency_ms * 1000.0).max(1.0) as u64;
-            let _ = histogram.record(micros.min(60_000_000));
+    fn metrics(&self) -> (f64, f64, f64, f64) {
+        if self.total_received == 0 {
+            return (0.0, 0.0, 0.0, 0.0);
         }
-        let percentile = |p: f64| histogram.value_at_quantile(p) as f64 / 1000.0;
-
-        (total, ok, client, other, avg, percentile(0.50), percentile(0.95), percentile(0.99))
+        (
+            self.latency_sum_ms / self.total_received as f64,
+            self.histogram.value_at_quantile(0.50) as f64 / 1000.0,
+            self.histogram.value_at_quantile(0.95) as f64 / 1000.0,
+            self.histogram.value_at_quantile(0.99) as f64 / 1000.0,
+        )
     }
 
     fn export(&mut self, csv: bool) {
         let path = PathBuf::from(if csv { "redpulse-report.csv" } else { "redpulse-report.json" });
+        let all_samples: Vec<Sample> = self.samples.iter().cloned().collect();
         let result = if csv {
-            report::export_csv(&path, &self.samples)
+            report::export_csv(&path, &all_samples)
         } else {
-            report::export_json(&path, &self.target, &self.method, self.workers, &self.samples)
+            report::export_json(&path, &self.target, &self.method, self.workers, &all_samples)
         };
         match result {
             Ok(()) => self.last_export = Some(format!("Saved {}", path.display())),
@@ -241,25 +274,21 @@ impl RedPulseApp {
                         ui.selectable_value(&mut self.method, "POST".into(), "POST");
                     });
             });
-
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Workers");
                 ui.add_enabled(self.running.is_none(), egui::Slider::new(&mut self.workers, 1..=64));
             });
-
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Duration");
                 ui.add_enabled(self.running.is_none(), egui::Slider::new(&mut self.duration, 1..=300).suffix(" s"));
             });
-
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Request rate");
                 ui.add_enabled(self.running.is_none(), egui::Slider::new(&mut self.rps, 1..=200).suffix(" req/s"));
             });
-
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Timeout");
@@ -290,8 +319,7 @@ impl RedPulseApp {
                 self.stop_test();
             }
             if ui.button("Clear results").clicked() && self.running.is_none() {
-                self.samples.clear();
-                self.recent_latencies.clear();
+                self.reset_results();
             }
         });
 
@@ -303,25 +331,27 @@ impl RedPulseApp {
         ui.add_space(14.0);
         ui.separator();
         ui.heading("Live metrics");
-        let (total, ok, client, other, avg, p50, p95, p99) = self.metrics();
-        let rps = total as f64 / self.elapsed_seconds.max(0.001);
+        let elapsed = self.elapsed_seconds.max(0.001);
+        let rps = self.total_received as f64 / elapsed;
+        let (avg, p50, p95, p99) = self.metrics();
 
         egui::Grid::new("metrics_grid")
             .num_columns(4)
             .spacing([10.0, 10.0])
             .show(ui, |ui| {
-                Self::metric_card(ui, "TOTAL REQUESTS", total, "");
+                Self::metric_card(ui, "TOTAL REQUESTS", self.total_received, "");
                 Self::metric_card(ui, "REQUESTS / SEC", format!("{rps:.2}"), "RPS");
-                Self::metric_card(ui, "SUCCESS", ok, "");
-                Self::metric_card(ui, "4xx", client, "");
+                Self::metric_card(ui, "SUCCESS", self.total_success, "");
+                Self::metric_card(ui, "4xx", self.total_client_errors, "");
                 ui.end_row();
 
-                Self::metric_card(ui, "5xx / NETWORK ERRORS", other, "");
+                Self::metric_card(ui, "5xx", self.total_server_errors, "");
+                Self::metric_card(ui, "NETWORK ERRORS", self.total_network_errors, "");
                 Self::metric_card(ui, "AVG LATENCY", format!("{avg:.1}"), "ms");
-                Self::metric_card(ui, "P50 LATENCY", format!("{p50:.1}"), "ms");
                 Self::metric_card(ui, "P95 / P99", format!("{p95:.1} / {p99:.1}"), "ms");
                 ui.end_row();
             });
+        ui.label(format!("P50 latency: {p50:.2} ms"));
 
         ui.add_space(12.0);
         ui.heading("Response time");
@@ -334,11 +364,13 @@ impl RedPulseApp {
             .height(190.0)
             .allow_zoom(true)
             .allow_drag(true)
-            .show(ui, |plot_ui| plot_ui.line(Line::new("Latency (ms)", points)));
+            .show(ui, |plot_ui| {
+                plot_ui.line(Line::new("Latency (ms)", points));
+            });
 
         ui.horizontal(|ui| {
             ui.label(format!("Elapsed: {:.1}s", self.elapsed_seconds));
-            ui.label(format!("Visible samples: {}", self.recent_latencies.len()));
+            ui.label(format!("Retained samples: {}", self.samples.len()));
         });
     }
 
@@ -357,8 +389,15 @@ impl RedPulseApp {
         });
 
         ui.add_space(8.0);
-        let (total, ok, client, other, avg, p50, p95, p99) = self.metrics();
-        ui.label(format!("{total} requests · {ok} successful · {client} client errors · {other} server/network errors"));
+        let (avg, p50, p95, p99) = self.metrics();
+        ui.label(format!(
+            "{} requests · {} successful · {} client errors · {} server errors · {} network errors",
+            self.total_received,
+            self.total_success,
+            self.total_client_errors,
+            self.total_server_errors,
+            self.total_network_errors
+        ));
         ui.label(format!("Average {avg:.2} ms · P50 {p50:.2} ms · P95 {p95:.2} ms · P99 {p99:.2} ms"));
         ui.separator();
 
@@ -409,13 +448,11 @@ impl RedPulseApp {
 impl eframe::App for RedPulseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_engine();
-
         if self.running.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| self.header(ui));
-
         egui::SidePanel::left("navigation")
             .resizable(false)
             .default_width(175.0)
