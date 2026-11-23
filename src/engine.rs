@@ -68,7 +68,7 @@ const MAX_DURATION_SECS: u64 = 300;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 pub fn start(config: TestConfig) -> Result<TestHandle, String> {
-    let parsed = Url::parse(&config.url).map_err(|e| format!("Invalid URL: {e}"))?;
+    let parsed = Url::parse(&config.url).map_err(|error| format!("Invalid URL: {error}"))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err("Only absolute HTTP and HTTPS URLs are supported.".into());
     }
@@ -97,7 +97,7 @@ pub fn start(config: TestConfig) -> Result<TestHandle, String> {
     let join = thread::Builder::new()
         .name("redpulse-engine".into())
         .spawn(move || run_engine(config, thread_stop, tx))
-        .map_err(|e| format!("Could not start engine: {e}"))?;
+        .map_err(|error| format!("Could not start engine: {error}"))?;
 
     Ok(TestHandle { stop, rx, join: Some(join) })
 }
@@ -153,6 +153,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                         break;
                     }
 
+                    // Reserve one global request slot, shared by all workers.
                     let scheduled = {
                         let mut slot = next_slot.lock().await;
                         let at = (*slot).max(Instant::now());
@@ -163,7 +164,10 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     if scheduled >= deadline || stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    tokio::time::sleep_until(tokio::time::Instant::from_std(scheduled)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(tokio::time::Instant::from_std(scheduled)) => {},
+                        _ = wait_for_stop(Arc::clone(&stop)) => break,
+                    }
                     if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
                         break;
                     }
@@ -178,17 +182,27 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
 
                     let result = request.send().await;
                     let (status, bytes, ok, error) = match result {
-                        Ok(response) => {
+                        Ok(mut response) => {
                             let status = response.status().as_u16();
-                            match response.bytes().await {
-                                Ok(content) => {
-                                    let size = content.len();
-                                    let truncated = size > MAX_RESPONSE_BYTES;
-                                    (status, size.min(MAX_RESPONSE_BYTES), status < 400,
-                                     truncated.then(|| "Response exceeded 2 MiB sample limit".to_string()))
+                            let mut count = 0usize;
+                            let mut read_error = None;
+                            loop {
+                                match response.chunk().await {
+                                    Ok(Some(chunk)) => {
+                                        count = count.saturating_add(chunk.len());
+                                        if count > MAX_RESPONSE_BYTES {
+                                            read_error = Some("Response body exceeded the 2 MiB measurement limit".to_string());
+                                            break;
+                                        }
+                                    }
+                                    Ok(None) => break,
+                                    Err(error) => {
+                                        read_error = Some(format!("Body read error: {error}"));
+                                        break;
+                                    }
                                 }
-                                Err(error) => (status, 0, false, Some(format!("Body read error: {error}"))),
                             }
+                            (status, count.min(MAX_RESPONSE_BYTES), status < 400, read_error)
                         }
                         Err(error) => (0, 0, false, Some(error.to_string())),
                     };
@@ -219,6 +233,12 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
             stopped: stop.load(Ordering::Relaxed),
         });
     });
+}
+
+async fn wait_for_stop(stop: Arc<AtomicBool>) {
+    while !stop.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +276,13 @@ mod tests {
     fn rejects_excessive_worker_count() {
         let mut cfg = config("https://example.com");
         cfg.workers = MAX_WORKERS + 1;
+        assert!(start(cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_excessive_request_rate() {
+        let mut cfg = config("https://example.com");
+        cfg.max_requests_per_second = MAX_RPS + 1;
         assert!(start(cfg).is_err());
     }
 }
