@@ -67,7 +67,7 @@ const MAX_RPS: u32 = 200;
 const MAX_DURATION_SECS: u64 = 300;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
-pub fn start(config: TestConfig) -> Result<TestHandle, String> {
+fn validate(config: &TestConfig) -> Result<(), String> {
     let parsed = Url::parse(&config.url).map_err(|error| format!("Invalid URL: {error}"))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err("Only absolute HTTP and HTTPS URLs are supported.".into());
@@ -90,6 +90,11 @@ pub fn start(config: TestConfig) -> Result<TestHandle, String> {
     if !matches!(config.method.as_str(), "GET" | "POST") {
         return Err("Supported methods are GET and POST.".into());
     }
+    Ok(())
+}
+
+pub fn start(config: TestConfig) -> Result<TestHandle, String> {
+    validate(&config)?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
@@ -259,24 +264,24 @@ mod tests {
 
     #[test]
     fn accepts_http_url() {
-        assert!(start(config("https://example.com")).is_ok());
+        assert!(validate(&config("https://example.com")).is_ok());
     }
 
     #[test]
     fn rejects_non_http_scheme() {
-        assert!(start(config("file:///etc/passwd")).is_err());
+        assert!(validate(&config("file:///etc/passwd")).is_err());
     }
 
     #[test]
     fn rejects_embedded_credentials() {
-        assert!(start(config("https://user:pass@example.com")).is_err());
+        assert!(validate(&config("https://user:pass@example.com")).is_err());
     }
 
     #[test]
     fn rejects_excessive_worker_count() {
         let mut cfg = config("https://example.com");
         cfg.workers = MAX_WORKERS + 1;
-        assert!(start(cfg).is_err());
+        assert!(validate(&cfg).is_err());
     }
 
     #[test]
