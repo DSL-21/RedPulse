@@ -51,7 +51,6 @@ pub struct RedPulseApp {
 impl RedPulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut visuals = egui::Visuals::dark();
-        visuals.window_rounding = egui::CornerRadius::same(10);
         cc.egui_ctx.set_visuals(visuals);
 
         Self {
@@ -157,21 +156,31 @@ impl RedPulseApp {
     }
 
     fn poll_engine(&mut self) {
+        // Drain the channel before mutating application state. This keeps the
+        // immutable borrow of TestHandle separate from mutable UI updates.
+        let events: Vec<EngineEvent> = self
+            .running
+            .as_ref()
+            .map(|handle| handle.rx.try_iter().collect())
+            .unwrap_or_default();
+
         let mut finished = false;
-        if let Some(handle) = &self.running {
-            while let Ok(event) = handle.rx.try_recv() {
-                match event {
-                    EngineEvent::Started => self.status = "Running".into(),
-                    EngineEvent::Sample(sample) => self.record_sample(sample),
-                    EngineEvent::Finished { stopped } => {
-                        self.status = if stopped { "Stopped".into() } else { "Completed".into() };
-                        finished = true;
-                    }
-                    EngineEvent::Fatal(message) => {
-                        self.error = Some(message);
-                        self.status = "Failed".into();
-                        finished = true;
-                    }
+        for event in events {
+            match event {
+                EngineEvent::Started => self.status = "Running".into(),
+                EngineEvent::Sample(sample) => self.record_sample(sample),
+                EngineEvent::Finished { stopped } => {
+                    self.status = if stopped {
+                        "Stopped".into()
+                    } else {
+                        "Completed".into()
+                    };
+                    finished = true;
+                }
+                EngineEvent::Fatal(message) => {
+                    self.error = Some(message);
+                    self.status = "Failed".into();
+                    finished = true;
                 }
             }
         }
@@ -222,7 +231,7 @@ impl RedPulseApp {
             .show(ui, |ui| {
                 ui.label(egui::RichText::new(label).small().color(egui::Color32::GRAY));
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new(value.to_string()).size(25).strong());
+                    ui.heading(egui::RichText::new(value.to_string()).size(25.0).strong());
                     ui.label(egui::RichText::new(unit).small().color(egui::Color32::GRAY));
                 });
             });
@@ -231,7 +240,7 @@ impl RedPulseApp {
     fn header(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("◉ REDPULSE")
-                .size(22)
+                .size(22.0)
                 .strong()
                 .color(egui::Color32::from_rgb(93, 180, 255)));
             ui.label(egui::RichText::new("HTTP BENCHMARK WORKBENCH")
