@@ -545,17 +545,16 @@ mod tests {
 
     #[test]
     fn arrival_scheduler_runs_independently_of_slow_workers() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind slow local test server");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind slow local test server");
         let address = listener.local_addr().expect("local server address");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept client");
             let mut request = [0u8; 2048];
             let _ = stream.read(&mut request);
             thread::sleep(Duration::from_millis(2_500));
-            let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-            );
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
         });
 
         let mut cfg = config(&format!("http://{address}/"));
@@ -587,12 +586,30 @@ mod tests {
         handle.join();
         server.join().expect("slow local server thread");
 
-        assert!(stats.scheduled >= 8, "scheduler should keep producing arrival slots");
-        assert_eq!(stats.started, 1, "one worker can have only one active request");
-        assert_eq!(stats.completed, 0, "the response is slower than the run duration");
-        assert!(stats.dropped > 0, "a full bounded queue must count dropped arrivals");
-        assert!(max_queued > 0, "scheduled arrivals should be visible in the queue");
-        assert!(max_in_flight > 0, "the active request should be counted in flight");
+        assert!(
+            stats.scheduled >= 8,
+            "scheduler should keep producing arrival slots"
+        );
+        assert_eq!(
+            stats.started, 1,
+            "one worker can have only one active request"
+        );
+        assert_eq!(
+            stats.completed, 0,
+            "the response is slower than the run duration"
+        );
+        assert!(
+            stats.dropped > 0,
+            "a full bounded queue must count dropped arrivals"
+        );
+        assert!(
+            max_queued > 0,
+            "scheduled arrivals should be visible in the queue"
+        );
+        assert!(
+            max_in_flight > 0,
+            "the active request should be counted in flight"
+        );
         assert_eq!(stats.queued, 0);
         assert_eq!(stats.in_flight, 0);
         assert_eq!(
