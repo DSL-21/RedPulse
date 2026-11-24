@@ -564,7 +564,12 @@ impl RedPulseApp {
         let (avg, min, p50, p95, p99, max) = self.metrics();
 
         ui.columns(4, |columns| {
-            Self::metric_card(&mut columns[0], "COMPLETED REQUESTS", self.total_received, "");
+            Self::metric_card(
+                &mut columns[0],
+                "COMPLETED REQUESTS",
+                self.total_received,
+                "",
+            );
             Self::metric_card(
                 &mut columns[1],
                 "OBSERVED THROUGHPUT",
@@ -578,8 +583,18 @@ impl RedPulseApp {
         ui.columns(4, |columns| {
             Self::metric_card(&mut columns[0], "HTTP 5xx", self.total_http_5xx, "");
             Self::metric_card(&mut columns[1], "HTTP 3xx", self.total_redirects, "");
-            Self::metric_card(&mut columns[2], "NETWORK ERRORS", self.total_network_errors, "");
-            Self::metric_card(&mut columns[3], "AVERAGE LATENCY", format!("{avg:.1}"), "ms");
+            Self::metric_card(
+                &mut columns[2],
+                "NETWORK ERRORS",
+                self.total_network_errors,
+                "",
+            );
+            Self::metric_card(
+                &mut columns[3],
+                "AVERAGE LATENCY",
+                format!("{avg:.1}"),
+                "ms",
+            );
         });
         ui.label(
             egui::RichText::new(format!(
@@ -766,7 +781,9 @@ impl RedPulseApp {
                     for sample in self.samples.iter().rev().take(500) {
                         ui.label(format!("{:.2}s", sample.elapsed_ms as f64 / 1000.0));
                         let color = match classify_status(sample.status) {
-                            ResponseClass::NetworkError | ResponseClass::ServerError => egui::Color32::LIGHT_RED,
+                            ResponseClass::NetworkError | ResponseClass::ServerError => {
+                                egui::Color32::LIGHT_RED
+                            }
                             ResponseClass::ClientError => egui::Color32::YELLOW,
                             ResponseClass::Redirect => egui::Color32::from_rgb(105, 174, 238),
                             ResponseClass::Success => egui::Color32::LIGHT_GREEN,
@@ -894,7 +911,6 @@ mod tests {
         assert_eq!(RedPulseApp::calculate_rps(10, f64::INFINITY), 0.0);
     }
 }
-
 
 #[cfg(test)]
 mod response_class_tests {

@@ -1,9 +1,9 @@
 use std::{
     error::Error as StdError,
     sync::{
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
-        Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -50,7 +50,9 @@ pub struct Sample {
 
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
-    Started { at: Instant },
+    Started {
+        at: Instant,
+    },
     Stats(EngineStats),
     Sample(Sample),
     Finished {
@@ -251,12 +253,7 @@ async fn execute_request(
             }
 
             let ok = (200..300).contains(&status) && read_error.is_none();
-            (
-                status,
-                count.min(MAX_RESPONSE_BYTES),
-                ok,
-                read_error,
-            )
+            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error)
         }
         Err(error) => (0, 0, false, Some(describe_reqwest_error(&error))),
     }
@@ -359,8 +356,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     emit_stats(&worker_tx, &worker_counters);
 
                     let request_started = Instant::now();
-                    let request_future =
-                        execute_request(&client, method.clone(), &url, &body);
+                    let request_future = execute_request(&client, method.clone(), &url, &body);
 
                     let result = tokio::select! {
                         _ = wait_for_stop(Arc::clone(&worker_stop)) => None,
@@ -551,17 +547,14 @@ mod tests {
 
     #[test]
     fn sends_http_request_and_stops_cleanly() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind local test server");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test server");
         let address = listener.local_addr().expect("local server address");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept client");
             let mut request = [0u8; 2048];
             let _ = stream.read(&mut request);
             stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-                )
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .expect("write response");
             stream.flush().expect("flush response");
         });
