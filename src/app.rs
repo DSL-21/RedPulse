@@ -9,11 +9,11 @@ use egui_plot::{Line, Plot, PlotPoints};
 use hdrhistogram::Histogram;
 
 use crate::{
-    recon::ReconState,
     engine::{
         self, EngineEvent, EngineStats, LoadModel, MAX_REQUEST_BODY_BYTES, MAX_RPS,
         MAX_TOTAL_REQUESTS, Sample, TestConfig, TestHandle,
     },
+    recon::ReconState,
     report,
 };
 

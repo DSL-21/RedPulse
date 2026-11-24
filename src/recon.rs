@@ -10,9 +10,12 @@ use std::{
 use chrono::{DateTime, Utc};
 use eframe::egui;
 use reqwest::{
-    blocking::{Client, Response},
-    header::{HeaderMap, HeaderValue, ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ALLOW, CONTENT_SECURITY_POLICY, REFERRER_POLICY, SET_COOKIE},
     Method, StatusCode,
+    blocking::{Client, Response},
+    header::{
+        ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ALLOW,
+        CONTENT_SECURITY_POLICY, HeaderMap, HeaderValue, REFERRER_POLICY, SET_COOKIE,
+    },
 };
 use serde::Serialize;
 use url::Url;
@@ -136,9 +139,9 @@ impl ReconState {
         let result = self.receiver.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err(
-                "Recon worker ended without returning a report.".into(),
-            )),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err("Recon worker ended without returning a report.".into()))
+            }
         });
 
         if let Some(result) = result {
@@ -319,12 +322,7 @@ fn contains_token(value: &str, token: &str) -> bool {
         .any(|item| item.eq_ignore_ascii_case(token))
 }
 
-fn analyze_headers(
-    url: &Url,
-    headers: &HeaderMap,
-    body: &str,
-    findings: &mut Vec<Finding>,
-) {
+fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Vec<Finding>) {
     let is_https = url.scheme() == "https";
     let csp = header_text(headers, "content-security-policy");
 
@@ -398,7 +396,9 @@ fn analyze_headers(
     }
 
     for cookie in headers.get_all(SET_COOKIE).iter() {
-        let Ok(cookie) = cookie.to_str() else { continue };
+        let Ok(cookie) = cookie.to_str() else {
+            continue;
+        };
         let lower = cookie.to_ascii_lowercase();
         let name = cookie.split(';').next().unwrap_or("cookie").trim();
         for (flag, label) in [
@@ -420,8 +420,7 @@ fn analyze_headers(
     }
 
     let allow_origin = header_text(headers, ACCESS_CONTROL_ALLOW_ORIGIN.as_str());
-    let allow_credentials =
-        header_text(headers, ACCESS_CONTROL_ALLOW_CREDENTIALS.as_str());
+    let allow_credentials = header_text(headers, ACCESS_CONTROL_ALLOW_CREDENTIALS.as_str());
     if allow_origin.as_deref() == Some("*")
         && allow_credentials
             .as_deref()
@@ -477,7 +476,9 @@ fn analyze_headers(
                 "Fingerprinting",
                 "Possible web technology identified",
                 format!("HTML marker matched: {marker}"),
-                &format!("Verify the {technology} fingerprint manually; content markers can produce false positives."),
+                &format!(
+                    "Verify the {technology} fingerprint manually; content markers can produce false positives."
+                ),
             );
         }
     }
@@ -522,21 +523,14 @@ fn analyze_allowed_methods(headers: &HeaderMap, findings: &mut Vec<Finding>) {
 
 fn read_bounded_body(response: Response) -> (usize, String) {
     let mut body = Vec::new();
-    let result = response
-        .take(MAX_FINGERPRINT_BYTES)
-        .read_to_end(&mut body);
+    let result = response.take(MAX_FINGERPRINT_BYTES).read_to_end(&mut body);
     if result.is_err() {
         return (body.len(), String::from_utf8_lossy(&body).into_owned());
     }
     (body.len(), String::from_utf8_lossy(&body).into_owned())
 }
 
-fn run_probe(
-    client: &Client,
-    method: Method,
-    url: &Url,
-    read_body: bool,
-) -> ProbeResult {
+fn run_probe(client: &Client, method: Method, url: &Url, read_body: bool) -> ProbeResult {
     let start = Instant::now();
     let method_name = method.as_str().to_owned();
     let path = url.path().to_owned();
@@ -554,7 +548,10 @@ fn run_probe(
             let location = header_text(&headers, "location");
             let note = match location {
                 Some(location) => format!("Location: {location}"),
-                None => format!("{} response", StatusCode::from_u16(status).unwrap_or(StatusCode::OK)),
+                None => format!(
+                    "{} response",
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::OK)
+                ),
             };
             ProbeResult {
                 method: method_name,
@@ -625,10 +622,7 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
 
         if index == 0 {
             if result.status.is_none() {
-                return Err(format!(
-                    "Primary target request failed: {}",
-                    result.note
-                ));
+                return Err(format!("Primary target request failed: {}", result.note));
             }
             if let Some(status) = result.status {
                 if (300..400).contains(&status) {
@@ -650,7 +644,12 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
                 Severity::Info,
                 "Probe control",
                 "Server requested reduced probing",
-                format!("{} {} returned HTTP {}. Remaining probes were skipped.", result.method, result.path, result.status.unwrap_or_default()),
+                format!(
+                    "{} {} returned HTTP {}. Remaining probes were skipped.",
+                    result.method,
+                    result.path,
+                    result.status.unwrap_or_default()
+                ),
                 "Retry only after the service is ready; the assessment stopped to avoid adding unnecessary load.",
             );
             results.push(result);
@@ -696,17 +695,17 @@ fn run_probe_metadata(_client: &Client, _results: &[ProbeResult], _url: &Url) ->
 }
 
 fn url_for_primary(results: &[ProbeResult]) -> Url {
-    Url::parse(&format!("http://localhost{}", results.first().map(|p| p.path.as_str()).unwrap_or("/")))
-        .expect("local fallback URL is valid")
+    Url::parse(&format!(
+        "http://localhost{}",
+        results.first().map(|p| p.path.as_str()).unwrap_or("/")
+    ))
+    .expect("local fallback URL is valid")
 }
 
 fn analyze_probe_results(url: &Url, probes: &[ProbeResult], findings: &mut Vec<Finding>) {
     if let Some(options) = probes.iter().find(|probe| probe.method == "OPTIONS") {
         // This is a safe OPTIONS observation only; no advertised methods are invoked.
-        let allow = options
-            .note
-            .strip_prefix("Allow: ")
-            .unwrap_or("");
+        let allow = options.note.strip_prefix("Allow: ").unwrap_or("");
         if !allow.is_empty() {
             let mut headers = HeaderMap::new();
             if let Ok(value) = HeaderValue::from_str(allow) {
@@ -766,9 +765,21 @@ fn render_report(ui: &mut egui::Ui, report: &ReconReport) {
     ui.heading("Recon summary");
 
     ui.columns(3, |columns| {
-        metric(&mut columns[0], "PROBES COMPLETED", report.probes.len().to_string());
-        metric(&mut columns[1], "FINDINGS", report.findings.len().to_string());
-        metric(&mut columns[2], "RESOLVED ADDRESSES", report.resolved_addresses.len().to_string());
+        metric(
+            &mut columns[0],
+            "PROBES COMPLETED",
+            report.probes.len().to_string(),
+        );
+        metric(
+            &mut columns[1],
+            "FINDINGS",
+            report.findings.len().to_string(),
+        );
+        metric(
+            &mut columns[2],
+            "RESOLVED ADDRESSES",
+            report.resolved_addresses.len().to_string(),
+        );
     });
 
     ui.add_space(8.0);
@@ -887,19 +898,34 @@ mod tests {
         let mut findings = Vec::new();
         analyze_headers(&url(), &headers, "", &mut findings);
         assert!(findings.iter().any(|f| f.title.contains("HSTS")));
-        assert!(findings.iter().any(|f| f.title.contains("Content Security Policy")));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.title.contains("Content Security Policy"))
+        );
         assert!(findings.iter().any(|f| f.title.contains("MIME sniffing")));
-        assert!(findings.iter().any(|f| f.title.contains("Framing protection")));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.title.contains("Framing protection"))
+        );
     }
 
     #[test]
     fn detects_wildcard_cors_with_credentials() {
         let mut headers = HeaderMap::new();
         headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-        headers.insert(ACCESS_CONTROL_ALLOW_CREDENTIALS, HeaderValue::from_static("true"));
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
         let mut findings = Vec::new();
         analyze_headers(&url(), &headers, "", &mut findings);
-        assert!(findings.iter().any(|f| f.category == "CORS" && f.severity == Severity::Medium));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.category == "CORS" && f.severity == Severity::Medium)
+        );
     }
 
     #[test]
@@ -908,17 +934,27 @@ mod tests {
         headers.insert(ALLOW, HeaderValue::from_static("GET, HEAD, TRACE, PUT"));
         let mut findings = Vec::new();
         analyze_allowed_methods(&headers, &mut findings);
-        assert!(findings.iter().any(|f| f.title.contains("Sensitive HTTP methods")));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.title.contains("Sensitive HTTP methods"))
+        );
     }
 
     #[test]
     fn finds_cookie_flag_gaps() {
         let mut headers = HeaderMap::new();
-        headers.append(SET_COOKIE, HeaderValue::from_static("sessionid=abc; Path=/"));
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("sessionid=abc; Path=/"),
+        );
         let mut findings = Vec::new();
         analyze_headers(&url(), &headers, "", &mut findings);
         assert_eq!(
-            findings.iter().filter(|finding| finding.title.contains("Cookie missing")).count(),
+            findings
+                .iter()
+                .filter(|finding| finding.title.contains("Cookie missing"))
+                .count(),
             3
         );
     }
@@ -936,8 +972,21 @@ mod tests {
     fn technology_fingerprint_is_informational_only() {
         let headers = HeaderMap::new();
         let mut findings = Vec::new();
-        analyze_headers(&url(), &headers, "<link href='/wp-content/themes/demo.css'>", &mut findings);
-        assert!(findings.iter().any(|f| f.title.contains("Possible web technology")));
-        assert!(findings.iter().all(|f| f.severity != Severity::High && f.severity != Severity::Critical));
+        analyze_headers(
+            &url(),
+            &headers,
+            "<link href='/wp-content/themes/demo.css'>",
+            &mut findings,
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.title.contains("Possible web technology"))
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|f| f.severity != Severity::High && f.severity != Severity::Critical)
+        );
     }
 }
