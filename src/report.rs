@@ -3,7 +3,7 @@ use std::{fs::File, io::Write, path::Path};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::engine::{DnsStrategy, EngineStats, Sample};
+use crate::engine::{DnsStrategy, EngineStats, HardwareSample, Sample};
 
 #[derive(Serialize)]
 pub struct RunConfig<'a> {
@@ -20,6 +20,7 @@ pub struct RunConfig<'a> {
     pub backend_id_header: &'a str,
     pub resolved_addresses: &'a [String],
     pub stats: EngineStats,
+    pub hardware_samples: &'a [HardwareSample],
 }
 
 #[derive(Serialize)]
