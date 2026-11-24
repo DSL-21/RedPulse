@@ -941,7 +941,7 @@ mod tests {
         );
     }
 
-remove obsolete pacer test    #[test]
+    #[test]
     fn closed_loop_reports_request_timeout_as_network_error() {
         let listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("bind timeout test server");
