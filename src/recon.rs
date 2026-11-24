@@ -10,12 +10,9 @@ use std::{
 use chrono::{DateTime, Utc};
 use eframe::egui;
 use reqwest::{
-    Method, StatusCode,
     blocking::{Client, Response},
-    header::{
-        ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ALLOW,
-        CONTENT_SECURITY_POLICY, HeaderMap, HeaderValue, REFERRER_POLICY, SET_COOKIE,
-    },
+    header::{HeaderMap, HeaderValue, ALLOW, SET_COOKIE},
+    Method, StatusCode,
 };
 use serde::Serialize;
 use url::Url;
@@ -89,6 +86,12 @@ pub struct ReconReport {
     pub stopped_early: bool,
 }
 
+struct ProbeExecution {
+    result: ProbeResult,
+    headers: Option<HeaderMap>,
+    body_sample: String,
+}
+
 #[derive(Default)]
 pub struct ReconState {
     target: String,
@@ -139,9 +142,9 @@ impl ReconState {
         let result = self.receiver.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                Some(Err("Recon worker ended without returning a report.".into()))
-            }
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                "Recon worker ended without returning a report.".into(),
+            )),
         });
 
         if let Some(result) = result {
@@ -316,10 +319,23 @@ fn add_finding(
     });
 }
 
-fn contains_token(value: &str, token: &str) -> bool {
-    value
-        .split(|character: char| character == ',' || character == ';' || character.is_whitespace())
-        .any(|item| item.eq_ignore_ascii_case(token))
+fn analyze_cors(headers: &HeaderMap, findings: &mut Vec<Finding>) {
+    let allow_origin = header_text(headers, "access-control-allow-origin");
+    let allow_credentials = header_text(headers, "access-control-allow-credentials");
+    if allow_origin.as_deref() == Some("*")
+        && allow_credentials
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    {
+        add_finding(
+            findings,
+            Severity::Medium,
+            "CORS",
+            "Wildcard origin combined with credentials",
+            "Access-Control-Allow-Origin: * and Access-Control-Allow-Credentials: true were both observed.",
+            "Review the CORS policy and return explicit trusted origins instead of a wildcard.",
+        );
+    }
 }
 
 fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Vec<Finding>) {
@@ -373,7 +389,7 @@ fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Ve
         );
     }
 
-    if headers.get(REFERRER_POLICY).is_none() {
+    if headers.get("referrer-policy").is_none() {
         add_finding(
             findings,
             Severity::Info,
@@ -396,9 +412,7 @@ fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Ve
     }
 
     for cookie in headers.get_all(SET_COOKIE).iter() {
-        let Ok(cookie) = cookie.to_str() else {
-            continue;
-        };
+        let Ok(cookie) = cookie.to_str() else { continue };
         let lower = cookie.to_ascii_lowercase();
         let name = cookie.split(';').next().unwrap_or("cookie").trim();
         for (flag, label) in [
@@ -419,45 +433,20 @@ fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Ve
         }
     }
 
-    let allow_origin = header_text(headers, ACCESS_CONTROL_ALLOW_ORIGIN.as_str());
-    let allow_credentials = header_text(headers, ACCESS_CONTROL_ALLOW_CREDENTIALS.as_str());
-    if allow_origin.as_deref() == Some("*")
-        && allow_credentials
-            .as_deref()
-            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
-    {
-        add_finding(
-            findings,
-            Severity::Medium,
-            "CORS",
-            "Wildcard origin combined with credentials",
-            "Access-Control-Allow-Origin: * and Access-Control-Allow-Credentials: true were both observed.",
-            "Review the CORS policy and return explicit trusted origins instead of a wildcard.",
-        );
-    }
+    analyze_cors(headers, findings);
 
-    if let Some(server) = header_text(headers, "server") {
-        if !server.trim().is_empty() {
-            add_finding(
-                findings,
-                Severity::Info,
-                "Fingerprinting",
-                "Server banner disclosed",
-                format!("Server: {server}"),
-                "Consider reducing unnecessary product and version disclosure in response headers.",
-            );
-        }
-    }
-    for name in ["x-powered-by", "x-aspnet-version", "x-generator"] {
+    for name in ["server", "x-powered-by", "x-aspnet-version", "x-generator"] {
         if let Some(value) = header_text(headers, name) {
-            add_finding(
-                findings,
-                Severity::Info,
-                "Fingerprinting",
-                "Technology header disclosed",
-                format!("{name}: {value}"),
-                "Review whether this technology detail needs to be exposed publicly.",
-            );
+            if !value.trim().is_empty() {
+                add_finding(
+                    findings,
+                    Severity::Info,
+                    "Fingerprinting",
+                    "Technology header disclosed",
+                    format!("{name}: {value}"),
+                    "Review whether this technology detail needs to be exposed publicly.",
+                );
+            }
         }
     }
 
@@ -476,18 +465,17 @@ fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Ve
                 "Fingerprinting",
                 "Possible web technology identified",
                 format!("HTML marker matched: {marker}"),
-                &format!(
-                    "Verify the {technology} fingerprint manually; content markers can produce false positives."
-                ),
+                &format!("Verify the {technology} fingerprint manually; content markers can produce false positives."),
             );
         }
     }
 }
 
 fn analyze_allowed_methods(headers: &HeaderMap, findings: &mut Vec<Finding>) {
-    let Some(allow) = header_text(headers, ALLOW.as_str()) else {
-        return;
-    };
+    let allow = header_text(headers, ALLOW.as_str())
+        .or_else(|| header_text(headers, "access-control-allow-methods"));
+    let Some(allow) = allow else { return };
+
     let methods: Vec<String> = allow
         .split(',')
         .map(str::trim)
@@ -500,7 +488,7 @@ fn analyze_allowed_methods(headers: &HeaderMap, findings: &mut Vec<Finding>) {
         Severity::Info,
         "HTTP surface",
         "HTTP methods advertised",
-        format!("Allow: {}", methods.join(", ")),
+        format!("Allowed methods observed: {}", methods.join(", ")),
         "Review the advertised methods and ensure each is intentionally supported.",
     );
 
@@ -515,7 +503,7 @@ fn analyze_allowed_methods(headers: &HeaderMap, findings: &mut Vec<Finding>) {
             Severity::Medium,
             "HTTP surface",
             "Sensitive HTTP methods advertised",
-            format!("Allow header includes: {}", unusual.join(", ")),
+            format!("Advertised methods include: {}", unusual.join(", ")),
             "Confirm these methods are required and protected by the intended authorization controls.",
         );
     }
@@ -523,52 +511,71 @@ fn analyze_allowed_methods(headers: &HeaderMap, findings: &mut Vec<Finding>) {
 
 fn read_bounded_body(response: Response) -> (usize, String) {
     let mut body = Vec::new();
-    let result = response.take(MAX_FINGERPRINT_BYTES).read_to_end(&mut body);
+    let result = response
+        .take(MAX_FINGERPRINT_BYTES)
+        .read_to_end(&mut body);
     if result.is_err() {
         return (body.len(), String::from_utf8_lossy(&body).into_owned());
     }
     (body.len(), String::from_utf8_lossy(&body).into_owned())
 }
 
-fn run_probe(client: &Client, method: Method, url: &Url, read_body: bool) -> ProbeResult {
+fn run_probe(
+    client: &Client,
+    method: Method,
+    url: &Url,
+    read_body: bool,
+) -> ProbeExecution {
     let start = Instant::now();
     let method_name = method.as_str().to_owned();
     let path = url.path().to_owned();
-    let response = client.request(method, url.clone()).send();
 
-    match response {
+    match client.request(method, url.clone()).send() {
         Ok(response) => {
             let status = response.status().as_u16();
             let headers = response.headers().clone();
-            let (bytes_read, body) = if read_body {
+            let (bytes_read, body_sample) = if read_body {
                 read_bounded_body(response)
             } else {
                 (0, String::new())
             };
             let location = header_text(&headers, "location");
-            let note = match location {
-                Some(location) => format!("Location: {location}"),
-                None => format!(
+            let content_type = header_text(&headers, "content-type");
+            let note = if let Some(location) = location {
+                format!("Location: {location}")
+            } else if let Some(content_type) = content_type {
+                format!("{status} · {content_type}")
+            } else {
+                format!(
                     "{} response",
                     StatusCode::from_u16(status).unwrap_or(StatusCode::OK)
-                ),
+                )
             };
-            ProbeResult {
-                method: method_name,
-                path,
-                status: Some(status),
-                elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
-                bytes_read,
-                note: if read_body { body } else { note },
+
+            ProbeExecution {
+                result: ProbeResult {
+                    method: method_name,
+                    path,
+                    status: Some(status),
+                    elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                    bytes_read,
+                    note,
+                },
+                headers: Some(headers),
+                body_sample,
             }
         }
-        Err(error) => ProbeResult {
-            method: method_name,
-            path,
-            status: None,
-            elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
-            bytes_read: 0,
-            note: format!("Request failed: {error}"),
+        Err(error) => ProbeExecution {
+            result: ProbeResult {
+                method: method_name,
+                path,
+                status: None,
+                elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                bytes_read: 0,
+                note: format!("Request failed: {error}"),
+            },
+            headers: None,
+            body_sample: String::new(),
         },
     }
 }
@@ -618,27 +625,39 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
         if index > 0 {
             thread::sleep(PROBE_INTERVAL);
         }
-        let result = run_probe(&client, method, &url, read_body);
+
+        let execution = run_probe(&client, method, &url, read_body);
+        let result = execution.result;
 
         if index == 0 {
             if result.status.is_none() {
                 return Err(format!("Primary target request failed: {}", result.note));
             }
-            if let Some(status) = result.status {
-                if (300..400).contains(&status) {
-                    add_finding(
-                        &mut findings,
-                        Severity::Info,
-                        "HTTP surface",
-                        "Target returned a redirect",
-                        result.note.clone(),
-                        "Review the redirect destination manually; RedPulse does not follow redirects during recon.",
-                    );
-                }
+
+            if let Some(headers) = execution.headers.as_ref() {
+                analyze_headers(&target_url, headers, &execution.body_sample, &mut findings);
+            }
+
+            if result.status.is_some_and(|status| (300..400).contains(&status)) {
+                add_finding(
+                    &mut findings,
+                    Severity::Info,
+                    "HTTP surface",
+                    "Target returned a redirect",
+                    result.note.clone(),
+                    "Review the redirect destination manually; RedPulse does not follow redirects during recon.",
+                );
             }
         }
 
-        if (result.status == Some(429) || result.status == Some(503)) {
+        if index == 2 {
+            if let Some(headers) = execution.headers.as_ref() {
+                analyze_allowed_methods(headers, &mut findings);
+                analyze_cors(headers, &mut findings);
+            }
+        }
+
+        if result.status == Some(429) || result.status == Some(503) {
             add_finding(
                 &mut findings,
                 Severity::Info,
@@ -657,25 +676,15 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
             break;
         }
 
-        if index == 0 {
-            // Analyze only the main target response and its bounded HTML sample.
-            let main_response = run_probe_metadata(&client, &results, &url_for_primary(&results));
-            let _ = main_response;
-        }
         results.push(result);
     }
 
-    // Re-fetching the main page is deliberately avoided: retain only metadata
-    // obtained from the one primary request below in the response-analysis path.
-    // Security checks are populated from the stored, bounded response snapshot.
-    let target_safe = {
-        let mut safe = target_url.clone();
-        safe.set_query(None);
-        safe.set_fragment(None);
-        safe.to_string()
-    };
+    let mut safe_target = target_url.clone();
+    safe_target.set_query(None);
+    safe_target.set_fragment(None);
+
     let mut report = ReconReport {
-        target: target_safe,
+        target: safe_target.to_string(),
         host,
         resolved_addresses: addresses,
         generated_at: Utc::now(),
@@ -688,33 +697,7 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
     Ok(report)
 }
 
-// The probe result intentionally stores a short note, not response content.
-// Header-focused findings are populated by the internal audit pass below.
-fn run_probe_metadata(_client: &Client, _results: &[ProbeResult], _url: &Url) -> Option<()> {
-    None
-}
-
-fn url_for_primary(results: &[ProbeResult]) -> Url {
-    Url::parse(&format!(
-        "http://localhost{}",
-        results.first().map(|p| p.path.as_str()).unwrap_or("/")
-    ))
-    .expect("local fallback URL is valid")
-}
-
 fn analyze_probe_results(url: &Url, probes: &[ProbeResult], findings: &mut Vec<Finding>) {
-    if let Some(options) = probes.iter().find(|probe| probe.method == "OPTIONS") {
-        // This is a safe OPTIONS observation only; no advertised methods are invoked.
-        let allow = options.note.strip_prefix("Allow: ").unwrap_or("");
-        if !allow.is_empty() {
-            let mut headers = HeaderMap::new();
-            if let Ok(value) = HeaderValue::from_str(allow) {
-                headers.insert(ALLOW, value);
-                analyze_allowed_methods(&headers, findings);
-            }
-        }
-    }
-
     for probe in probes {
         if let Some(status) = probe.status {
             if status == 200 && probe.path.ends_with("security.txt") {
@@ -765,21 +748,9 @@ fn render_report(ui: &mut egui::Ui, report: &ReconReport) {
     ui.heading("Recon summary");
 
     ui.columns(3, |columns| {
-        metric(
-            &mut columns[0],
-            "PROBES COMPLETED",
-            report.probes.len().to_string(),
-        );
-        metric(
-            &mut columns[1],
-            "FINDINGS",
-            report.findings.len().to_string(),
-        );
-        metric(
-            &mut columns[2],
-            "RESOLVED ADDRESSES",
-            report.resolved_addresses.len().to_string(),
-        );
+        metric(&mut columns[0], "PROBES COMPLETED", report.probes.len().to_string());
+        metric(&mut columns[1], "FINDINGS", report.findings.len().to_string());
+        metric(&mut columns[2], "RESOLVED ADDRESSES", report.resolved_addresses.len().to_string());
     });
 
     ui.add_space(8.0);
@@ -879,7 +850,7 @@ fn metric(ui: &mut egui::Ui, title: &str, value: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::header::{HeaderName, HeaderValue};
+    use reqwest::header::HeaderValue;
 
     fn url() -> Url {
         Url::parse("https://test.example/").expect("test URL")
@@ -898,34 +869,19 @@ mod tests {
         let mut findings = Vec::new();
         analyze_headers(&url(), &headers, "", &mut findings);
         assert!(findings.iter().any(|f| f.title.contains("HSTS")));
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.title.contains("Content Security Policy"))
-        );
+        assert!(findings.iter().any(|f| f.title.contains("Content Security Policy")));
         assert!(findings.iter().any(|f| f.title.contains("MIME sniffing")));
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.title.contains("Framing protection"))
-        );
+        assert!(findings.iter().any(|f| f.title.contains("Framing protection")));
     }
 
     #[test]
     fn detects_wildcard_cors_with_credentials() {
         let mut headers = HeaderMap::new();
-        headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-        headers.insert(
-            ACCESS_CONTROL_ALLOW_CREDENTIALS,
-            HeaderValue::from_static("true"),
-        );
+        headers.insert("access-control-allow-origin", HeaderValue::from_static("*"));
+        headers.insert("access-control-allow-credentials", HeaderValue::from_static("true"));
         let mut findings = Vec::new();
         analyze_headers(&url(), &headers, "", &mut findings);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.category == "CORS" && f.severity == Severity::Medium)
-        );
+        assert!(findings.iter().any(|f| f.category == "CORS" && f.severity == Severity::Medium));
     }
 
     #[test]
@@ -934,27 +890,17 @@ mod tests {
         headers.insert(ALLOW, HeaderValue::from_static("GET, HEAD, TRACE, PUT"));
         let mut findings = Vec::new();
         analyze_allowed_methods(&headers, &mut findings);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.title.contains("Sensitive HTTP methods"))
-        );
+        assert!(findings.iter().any(|f| f.title.contains("Sensitive HTTP methods")));
     }
 
     #[test]
     fn finds_cookie_flag_gaps() {
         let mut headers = HeaderMap::new();
-        headers.append(
-            SET_COOKIE,
-            HeaderValue::from_static("sessionid=abc; Path=/"),
-        );
+        headers.append(SET_COOKIE, HeaderValue::from_static("sessionid=abc; Path=/"));
         let mut findings = Vec::new();
         analyze_headers(&url(), &headers, "", &mut findings);
         assert_eq!(
-            findings
-                .iter()
-                .filter(|finding| finding.title.contains("Cookie missing"))
-                .count(),
+            findings.iter().filter(|finding| finding.title.contains("Cookie missing")).count(),
             3
         );
     }
@@ -972,21 +918,8 @@ mod tests {
     fn technology_fingerprint_is_informational_only() {
         let headers = HeaderMap::new();
         let mut findings = Vec::new();
-        analyze_headers(
-            &url(),
-            &headers,
-            "<link href='/wp-content/themes/demo.css'>",
-            &mut findings,
-        );
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.title.contains("Possible web technology"))
-        );
-        assert!(
-            findings
-                .iter()
-                .all(|f| f.severity != Severity::High && f.severity != Severity::Critical)
-        );
+        analyze_headers(&url(), &headers, "<link href='/wp-content/themes/demo.css'>", &mut findings);
+        assert!(findings.iter().any(|f| f.title.contains("Possible web technology")));
+        assert!(findings.iter().all(|f| f.severity != Severity::High && f.severity != Severity::Critical));
     }
 }
