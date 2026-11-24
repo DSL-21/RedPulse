@@ -109,7 +109,7 @@ pub fn start(config: TestConfig) -> Result<TestHandle, String> {
 
 fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>) {
     let runtime = match Builder::new_multi_thread()
-        .worker_threads(config.workers.min(8).max(2))
+        .worker_threads(config.workers.clamp(2, 8))
         .enable_all()
         .build()
     {
