@@ -8,8 +8,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("RedPulse")
-            .with_inner_size([1180.0, 780.0])
-            .with_min_inner_size([900.0, 640.0]),
+            .with_inner_size([1040.0, 700.0])
+            .with_min_inner_size([840.0, 580.0]),
         ..Default::default()
     };
 
