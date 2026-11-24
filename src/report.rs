@@ -63,7 +63,7 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
         "elapsed_us,elapsed_ms,latency_ms,status,status_class,endpoint_ip,bytes,ok,error,timestamp"
     )?;
     for sample in samples {
-        let error = sample.error.as_deref().unwrap_or("").replace('"', "\""");
+        let error = sample.error.as_deref().unwrap_or("").replace('"', "\"\"");
         let endpoint_ip = sample.endpoint_ip.as_deref().unwrap_or("");
         writeln!(
             file,
