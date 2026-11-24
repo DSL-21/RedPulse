@@ -369,7 +369,11 @@ impl RedPulseApp {
                     self.status = "Running".into();
                 }
                 EngineEvent::Stats(stats) => self.engine_stats = stats,
-                EngineEvent::Sample(sample) => self.record_sample(sample),
+                EngineEvent::Samples(samples) => {
+                    for sample in samples {
+                        self.record_sample(sample);
+                    }
+                }
                 EngineEvent::Hardware(sample) => {
                     if self.hardware_samples.len() == MAX_HARDWARE_SAMPLES {
                         self.hardware_samples.pop_front();
@@ -854,7 +858,7 @@ impl RedPulseApp {
                     &mut columns[1],
                     "REDPULSE CPU",
                     format!("{:.1}", hardware.process_cpu_percent),
-                    "% / core",
+                    "% of one core",
                 );
                 Self::metric_card(
                     &mut columns[2],
