@@ -19,6 +19,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be MAJOR.MINOR.PATCH" }
+          $cargo = Get-Content Cargo.toml -Raw
+          if (-not $cargo.Contains("version = `"$version`"")) { throw "Cargo.toml version must match requested release." }
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run tests
+        run: cargo test --all
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Build release executable
         run: cargo build --release --target x86_64-pc-windows-msvc
       - name: Prepare executable and checksum
