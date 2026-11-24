@@ -262,14 +262,12 @@ fn build_origin_routes(
             // Pin the TCP destination while keeping the original URL hostname
             // intact for HTTP Host and TLS SNI. Proxies are disabled in this
             // mode because a proxy would resolve the origin on its own side.
-            builder = builder
-                .no_proxy()
-                .resolve(host, SocketAddr::new(ip, 0));
+            builder = builder.no_proxy().resolve(host, SocketAddr::new(ip, 0));
         }
 
-        let client = builder.build().map_err(|error| {
-            format!("HTTP client error: {}", describe_reqwest_error(&error))
-        })?;
+        let client = builder
+            .build()
+            .map_err(|error| format!("HTTP client error: {}", describe_reqwest_error(&error)))?;
         routes.push(OriginRoute { client, ip });
     }
 
@@ -824,9 +822,7 @@ mod tests {
     #[test]
     fn round_robin_route_selection_cycles_through_every_ip() {
         let cursor = AtomicU64::new(0);
-        let indices: Vec<usize> = (0..7)
-            .map(|_| next_route_index(&cursor, 3))
-            .collect();
+        let indices: Vec<usize> = (0..7).map(|_| next_route_index(&cursor, 3)).collect();
         assert_eq!(indices, vec![0, 1, 2, 0, 1, 2, 0]);
     }
 
@@ -838,7 +834,10 @@ mod tests {
         let (routes, addresses) =
             build_origin_routes(&cfg, &url).expect("build pinned origin client");
         assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].ip, Some("127.0.0.1".parse().expect("loopback IP")));
+        assert_eq!(
+            routes[0].ip,
+            Some("127.0.0.1".parse().expect("loopback IP"))
+        );
         assert_eq!(addresses, vec!["127.0.0.1"]);
         assert_eq!(url.host_str(), Some("127.0.0.1"));
     }

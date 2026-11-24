@@ -10,8 +10,8 @@ use hdrhistogram::Histogram;
 
 use crate::{
     engine::{
-        self, DEFAULT_MAX_TOTAL_REQUESTS, DnsStrategy, EngineEvent, EngineStats,
-        LoadModel, MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
+        self, DEFAULT_MAX_TOTAL_REQUESTS, DnsStrategy, EngineEvent, EngineStats, LoadModel,
+        MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
     },
     recon::ReconState,
     report,
@@ -813,7 +813,11 @@ impl RedPulseApp {
                 ui.label("Resolving target addresses…");
             } else {
                 for address in &self.resolved_addresses {
-                    let requests = self.origin_request_counts.get(address).copied().unwrap_or(0);
+                    let requests = self
+                        .origin_request_counts
+                        .get(address)
+                        .copied()
+                        .unwrap_or(0);
                     ui.label(format!("{address}  ·  {requests} requests"));
                 }
             }
@@ -988,7 +992,14 @@ impl RedPulseApp {
             egui::Grid::new("sample_table")
                 .striped(true)
                 .show(ui, |ui| {
-                    for heading in ["Elapsed", "Status", "Latency", "Origin IP", "Bytes", "Result"] {
+                    for heading in [
+                        "Elapsed",
+                        "Status",
+                        "Latency",
+                        "Origin IP",
+                        "Bytes",
+                        "Result",
+                    ] {
                         ui.strong(heading);
                     }
                     ui.end_row();
