@@ -12,7 +12,7 @@ use eframe::egui;
 use reqwest::{
     Method, StatusCode,
     blocking::{Client, Response},
-    header::{ALLOW, HeaderMap, HeaderValue, SET_COOKIE},
+    header::{ALLOW, HeaderMap, SET_COOKIE},
 };
 use serde::Serialize;
 use url::Url;
@@ -27,8 +27,6 @@ const MAX_DISPLAYED_IPS: usize = 8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
-    Critical,
-    High,
     Medium,
     Low,
     Info,
@@ -37,8 +35,6 @@ pub enum Severity {
 impl Severity {
     fn label(self) -> &'static str {
         match self {
-            Self::Critical => "CRITICAL",
-            Self::High => "HIGH",
             Self::Medium => "MEDIUM",
             Self::Low => "LOW",
             Self::Info => "INFO",
@@ -47,8 +43,6 @@ impl Severity {
 
     fn color(self) -> egui::Color32 {
         match self {
-            Self::Critical => egui::Color32::from_rgb(255, 75, 85),
-            Self::High => egui::Color32::from_rgb(238, 112, 88),
             Self::Medium => egui::Color32::from_rgb(235, 174, 75),
             Self::Low => egui::Color32::from_rgb(95, 169, 231),
             Self::Info => egui::Color32::from_rgb(151, 166, 186),
@@ -188,7 +182,7 @@ impl ReconState {
         egui::Frame::group(ui.style())
             .fill(egui::Color32::from_rgb(22, 29, 41))
             .stroke(egui::Stroke::new(
-                1.0,
+                1.0_f32,
                 egui::Color32::from_rgb(48, 65, 86),
             ))
             .corner_radius(12)
@@ -438,17 +432,17 @@ fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Ve
     analyze_cors(headers, findings);
 
     for name in ["server", "x-powered-by", "x-aspnet-version", "x-generator"] {
-        if let Some(value) = header_text(headers, name) {
-            if !value.trim().is_empty() {
-                add_finding(
-                    findings,
-                    Severity::Info,
-                    "Fingerprinting",
-                    "Technology header disclosed",
-                    format!("{name}: {value}"),
-                    "Review whether this technology detail needs to be exposed publicly.",
-                );
-            }
+        if let Some(value) = header_text(headers, name)
+            && !value.trim().is_empty()
+        {
+            add_finding(
+                findings,
+                Severity::Info,
+                "Fingerprinting",
+                "Technology header disclosed",
+                format!("{name}: {value}"),
+                "Review whether this technology detail needs to be exposed publicly.",
+            );
         }
     }
 
@@ -650,11 +644,11 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
             }
         }
 
-        if index == 2 {
-            if let Some(headers) = execution.headers.as_ref() {
-                analyze_allowed_methods(headers, &mut findings);
-                analyze_cors(headers, &mut findings);
-            }
+        if index == 2
+            && let Some(headers) = execution.headers.as_ref()
+        {
+            analyze_allowed_methods(headers, &mut findings);
+            analyze_cors(headers, &mut findings);
         }
 
         if result.status == Some(429) || result.status == Some(503) {
@@ -816,7 +810,7 @@ fn render_report(ui: &mut egui::Ui, report: &ReconReport) {
         for finding in &report.findings {
             egui::Frame::group(ui.style())
                 .fill(egui::Color32::from_rgb(22, 29, 41))
-                .stroke(egui::Stroke::new(1.0, finding.severity.color()))
+                .stroke(egui::Stroke::new(1.0_f32, finding.severity.color()))
                 .corner_radius(8)
                 .inner_margin(10)
                 .show(ui, |ui| {
@@ -845,7 +839,7 @@ fn render_report(ui: &mut egui::Ui, report: &ReconReport) {
 fn metric(ui: &mut egui::Ui, title: &str, value: String) {
     egui::Frame::group(ui.style())
         .fill(egui::Color32::from_rgb(25, 34, 48))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(48, 65, 86)))
+        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(48, 65, 86)))
         .corner_radius(10)
         .inner_margin(10)
         .show(ui, |ui| {
@@ -966,10 +960,10 @@ mod tests {
                 .iter()
                 .any(|f| f.title.contains("Possible web technology"))
         );
-        assert!(
-            findings
-                .iter()
-                .all(|f| f.severity != Severity::High && f.severity != Severity::Critical)
-        );
+        let fingerprint = findings
+            .iter()
+            .find(|finding| finding.title.contains("Possible web technology"))
+            .expect("technology fingerprint finding");
+        assert_eq!(fingerprint.severity, Severity::Info);
     }
 }
