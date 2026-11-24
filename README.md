@@ -28,10 +28,11 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 - System DNS mode or round-robin routing across DNS-resolved IPv4/IPv6 addresses.
 - Direct pinned-IP connections that preserve the original URL hostname for HTTP Host and TLS SNI.
 - Per-request origin IP attribution and live per-IP request distribution.
-- Origin IP included in sample tables and CSV/JSON reports.
+- Optional response-header backend attribution (for example `X-Backend-ID`) with live backend distribution.
+- Origin IP and detected backend identity included in sample tables and CSV/JSON reports.
 - Optional Web Recon tab retained from the earlier prototype.
 
-The current release concentrates on the configurable HTTP traffic engine. Dedicated multi-origin and load-balancer distribution/failover analysis is the next development milestone; the existing Recon tab is not the main product direction.
+The current release concentrates on the configurable HTTP traffic engine, DNS origin routing, and response-header backend attribution. Backend attribution depends on the target application exposing a stable response header; it cannot reveal private backend nodes that the application does not identify. The existing Recon tab is not the main product direction.
 
 ## Quick start
 
@@ -64,7 +65,7 @@ Each worker starts its next request after its previous request completes. There 
 
 The live Traffic Lab view counts requests per origin IP. Each retained sample records its selected IP, and the IP is included in result tables and report exports. If the DNS name returns only one address, this mode naturally uses that one address.
 
-This feature tests the IP addresses published for a hostname. A public load balancer often hides private backend addresses; DNS rotation therefore does not prove how the balancer distributes traffic among those hidden backends. Backend distribution analysis requires an application-provided backend identifier or response header and is a separate upcoming feature.
+This feature tests the IP addresses published for a hostname. A public load balancer often hides private backend addresses; DNS rotation therefore does not prove how the balancer distributes traffic among those hidden backends. For that reason RedPulse can optionally inspect a response header such as `X-Backend-ID` or `X-Served-By`. Configure the header in Traffic Lab to count responses by the identifier returned by the application. This is observed backend attribution, not inference: responses without that header remain unattributed.
 
 ### Configurable run budget
 
@@ -111,14 +112,14 @@ target/x86_64-pc-windows-msvc/release/redpulse.exe
 
 ## Reports
 
-- **JSON** contains application metadata, target, method, configured worker count, traffic model, configured request budget, generation timestamp, final counters, and retained samples.
-- **CSV** contains one row per retained request sample, including the selected origin IP when DNS pinning is enabled.
+- **JSON** contains application metadata, target, method, configured worker count, traffic model, configured request budget, generation timestamp, final counters, and retained samples including origin IP and optional backend identity.
+- **CSV** contains one row per retained request sample, including selected origin IP, optional backend identity, status class, and correctly quoted text fields.
 
 Reports are written to the application's current working directory using `redpulse-report.json` and `redpulse-report.csv`.
 
 ## Project status
 
-RedPulse 0.3.0 adds DNS-based multi-IP origin routing and per-request IP attribution on top of the configurable traffic engine. The next stages are backend distribution analysis, failover testing, hardware telemetry, traffic profiles, and controlled benchmark comparisons.
+RedPulse 0.4.0 adds optional response-header backend attribution and per-backend request distribution on top of the configurable HTTP engine and DNS-based multi-IP routing. This is an observation feature: a backend is identified only when the application returns the configured header. Further milestones include generator hardware telemetry, controlled traffic profiles, failover experiments, and reproducible benchmark comparisons.
 
 Use the tool only against systems you own or are explicitly authorized to test. Set a request budget and duration appropriate for the environment before starting a run.
 
