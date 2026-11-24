@@ -14,6 +14,7 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 
 - Native Windows desktop UI built with egui / eframe.
 - Rust async HTTP engine built on Tokio and Reqwest with Rustls.
+- HTTP/1.1 and HTTP/2 support, with the negotiated protocol recorded per response.
 - Constant Arrival Rate and Closed Loop traffic-generation models.
 - User-configurable worker count, arrival rate, run duration, timeout, and request budget.
 - No fixed application-level 64-worker or 200-RPS ceiling.
@@ -29,10 +30,13 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 - Direct pinned-IP connections that preserve the original URL hostname for HTTP Host and TLS SNI.
 - Per-request origin IP attribution and live per-IP request distribution.
 - Optional response-header backend attribution (for example `X-Backend-ID`) with live backend distribution.
-- Origin IP and detected backend identity included in sample tables and CSV/JSON reports.
+- Origin IP, negotiated HTTP protocol, and detected backend identity included in sample tables and CSV/JSON reports.
+- Live host and RedPulse-process CPU/RAM telemetry, plus host-wide network receive/transmit throughput.
+- Generator-headroom warning when CPU measurements indicate that the test machine may be limiting the run.
+- Batched request-sample events and periodic counter updates to reduce GUI/event overhead at high response rates.
 - Optional Web Recon tab retained from the earlier prototype.
 
-The current release concentrates on the configurable HTTP traffic engine, DNS origin routing, and response-header backend attribution. Backend attribution depends on the target application exposing a stable response header; it cannot reveal private backend nodes that the application does not identify. The existing Recon tab is not the main product direction.
+The current release combines the configurable HTTP traffic engine, DNS origin routing, response-header backend attribution, negotiated HTTP protocol reporting, and local generator telemetry. Backend attribution depends on the target application exposing a stable response header; it cannot reveal private backend nodes that the application does not identify. The existing Recon tab is not the main product direction.
 
 ## Quick start
 
@@ -77,7 +81,15 @@ The queue remains bounded to prevent unbounded backlog growth. A bounded queue d
 
 The Tokio runtime uses the logical CPU parallelism reported by the operating system instead of clamping runtime threads to eight. Worker tasks are asynchronous and are not one operating-system thread each. Increasing workers can raise concurrent network activity, but it does not guarantee higher throughput: connection limits, target capacity, local socket limits, CPU, memory, and available bandwidth all matter.
 
-A useful benchmark must identify whether the generator, network path, or target is the bottleneck. RedPulse's next performance milestone is to add local generator telemetry and reproducible side-by-side benchmarks against established tools on identical hardware.
+RedPulse samples hardware telemetry once per second while a run is active. It records average host CPU usage across logical cores, RedPulse process CPU usage, host memory usage, RedPulse process memory, and host-wide network RX/TX throughput. Network counters are summed across the host's visible interfaces; they are not process-only measurements. Process CPU can exceed 100% because one fully utilized logical core is represented as 100%; the UI also normalizes process CPU against the total logical-core capacity.
+
+The CPU headroom indicator is a diagnostic heuristic, not a proof that the generator is saturated. Treat a run with very high host or process CPU as potentially generator-limited. The runtime and worker tasks are asynchronous; adding workers does not automatically mean more CPU throughput.
+
+Request samples are passed to the UI in batches of up to 64, or after 50 ms, whichever comes first. Live request counters are published every 250 ms instead of generating a separate statistics event for every request. This reduces UI/event overhead while preserving each retained response sample. The arrival queue is bounded and uses a multi-consumer receiver without a shared async mutex.
+
+Reqwest's HTTP/2 support is enabled. The protocol shown for each response is the protocol actually negotiated with the endpoint; HTTP/2 requires the endpoint and TLS negotiation to support it. HTTP/3 is not enabled in this stable build.
+
+A useful benchmark should identify whether the generator, network path, or target is the bottleneck. RedPulse now records local generator telemetry to help distinguish these cases; reproducible side-by-side comparisons against established tools on identical hardware remain a future benchmark milestone.
 
 ## Measurement and retention
 
@@ -112,14 +124,14 @@ target/x86_64-pc-windows-msvc/release/redpulse.exe
 
 ## Reports
 
-- **JSON** contains application metadata, target, method, configured worker count, traffic model, configured request budget, generation timestamp, final counters, and retained samples including origin IP and optional backend identity.
-- **CSV** contains one row per retained request sample, including selected origin IP, optional backend identity, status class, and correctly quoted text fields.
+- **JSON** contains application metadata, target, method, configured worker count, traffic model, configured request budget, generation timestamp, final counters, retained request samples (including origin IP, negotiated HTTP protocol, and optional backend identity), and retained hardware samples.
+- **CSV** contains one row per retained request sample, including selected origin IP, negotiated HTTP protocol, optional backend identity, status class, and correctly quoted text fields. Hardware history is currently included in JSON, not the request-row CSV.
 
 Reports are written to the application's current working directory using `redpulse-report.json` and `redpulse-report.csv`.
 
 ## Project status
 
-RedPulse 0.4.0 adds optional response-header backend attribution and per-backend request distribution on top of the configurable HTTP engine and DNS-based multi-IP routing. This is an observation feature: a backend is identified only when the application returns the configured header. Further milestones include generator hardware telemetry, controlled traffic profiles, failover experiments, and reproducible benchmark comparisons.
+RedPulse 0.5.0 adds live generator/host hardware telemetry, generator-headroom diagnostics, batched result delivery, periodic counters, HTTP/2 support, and per-response negotiated protocol attribution. It retains DNS-based multi-IP routing and optional backend identity distribution. Backend attribution is observational: a backend is identified only when the application returns the configured header. Controlled traffic profiles, explicit failover experiments, and reproducible side-by-side benchmark comparisons remain future work.
 
 Use the tool only against systems you own or are explicitly authorized to test. Set a request budget and duration appropriate for the environment before starting a run.
 
