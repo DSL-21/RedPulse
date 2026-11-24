@@ -56,12 +56,17 @@ jobs:
           VERSION: ${{ steps.release_meta.outputs.version }}
         shell: pwsh
         run: |
-          gh release view "v$env:VERSION" *> $null
-          if ($LASTEXITCODE -eq 0) {
+          gh release list --limit 100 --json tagName | Set-Content release-list.json
+          if ($LASTEXITCODE -ne 0) { throw "Could not query existing GitHub releases." }
+          $releases = @(Get-Content release-list.json -Raw | ConvertFrom-Json)
+          $tag = "v$env:VERSION"
+          $exists = @($releases | Where-Object { $_.tagName -eq $tag }).Count -gt 0
+          if ($exists) {
             "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            Write-Host "Release v$env:VERSION already exists; skipping duplicate publication."
+            Write-Host "Release $tag already exists; skipping duplicate publication."
           } else {
             "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Release $tag does not exist; continuing with publication."
           }
 
       - name: Generate dependency lockfile
