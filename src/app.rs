@@ -141,10 +141,8 @@ impl RedPulseApp {
         let micros = (sample.latency_ms * 1000.0).max(1.0) as u64;
         let _ = self.histogram.record(micros.min(60_000_000));
 
-        self.recent_latencies.push_back((
-            sample.elapsed_ms as f64 / 1000.0,
-            sample.latency_ms,
-        ));
+        self.recent_latencies
+            .push_back((sample.elapsed_ms as f64 / 1000.0, sample.latency_ms));
         while self.recent_latencies.len() > 600 {
             self.recent_latencies.pop_front();
         }
@@ -210,12 +208,22 @@ impl RedPulseApp {
     }
 
     fn export(&mut self, csv: bool) {
-        let path = PathBuf::from(if csv { "redpulse-report.csv" } else { "redpulse-report.json" });
+        let path = PathBuf::from(if csv {
+            "redpulse-report.csv"
+        } else {
+            "redpulse-report.json"
+        });
         let all_samples: Vec<Sample> = self.samples.iter().cloned().collect();
         let result = if csv {
             report::export_csv(&path, &all_samples)
         } else {
-            report::export_json(&path, &self.target, &self.method, self.workers, &all_samples)
+            report::export_json(
+                &path,
+                &self.target,
+                &self.method,
+                self.workers,
+                &all_samples,
+            )
         };
         match result {
             Ok(()) => self.last_export = Some(format!("Saved {}", path.display())),
@@ -229,7 +237,11 @@ impl RedPulseApp {
             .corner_radius(10)
             .inner_margin(12)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new(label).small().color(egui::Color32::GRAY));
+                ui.label(
+                    egui::RichText::new(label)
+                        .small()
+                        .color(egui::Color32::GRAY),
+                );
                 ui.horizontal(|ui| {
                     ui.heading(egui::RichText::new(value.to_string()).size(25.0).strong());
                     ui.label(egui::RichText::new(unit).small().color(egui::Color32::GRAY));
@@ -239,22 +251,28 @@ impl RedPulseApp {
 
     fn header(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new("◉ REDPULSE")
-                .size(22.0)
-                .strong()
-                .color(egui::Color32::from_rgb(93, 180, 255)));
-            ui.label(egui::RichText::new("HTTP BENCHMARK WORKBENCH")
-                .small()
-                .color(egui::Color32::GRAY));
+            ui.heading(
+                egui::RichText::new("◉ REDPULSE")
+                    .size(22.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(93, 180, 255)),
+            );
+            ui.label(
+                egui::RichText::new("HTTP BENCHMARK WORKBENCH")
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let color = if self.running.is_some() {
                     egui::Color32::from_rgb(70, 200, 130)
                 } else {
                     egui::Color32::GRAY
                 };
-                ui.label(egui::RichText::new(format!("● {}", self.status.to_uppercase()))
-                    .color(color)
-                    .strong());
+                ui.label(
+                    egui::RichText::new(format!("● {}", self.status.to_uppercase()))
+                        .color(color)
+                        .strong(),
+                );
             });
         });
         ui.add_space(10.0);
@@ -286,22 +304,34 @@ impl RedPulseApp {
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Workers");
-                ui.add_enabled(self.running.is_none(), egui::Slider::new(&mut self.workers, 1..=64));
+                ui.add_enabled(
+                    self.running.is_none(),
+                    egui::Slider::new(&mut self.workers, 1..=64),
+                );
             });
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Duration");
-                ui.add_enabled(self.running.is_none(), egui::Slider::new(&mut self.duration, 1..=300).suffix(" s"));
+                ui.add_enabled(
+                    self.running.is_none(),
+                    egui::Slider::new(&mut self.duration, 1..=300).suffix(" s"),
+                );
             });
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Request rate");
-                ui.add_enabled(self.running.is_none(), egui::Slider::new(&mut self.rps, 1..=200).suffix(" req/s"));
+                ui.add_enabled(
+                    self.running.is_none(),
+                    egui::Slider::new(&mut self.rps, 1..=200).suffix(" req/s"),
+                );
             });
             ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Timeout");
-                ui.add_enabled(self.running.is_none(), egui::Slider::new(&mut self.timeout, 1..=60).suffix(" s"));
+                ui.add_enabled(
+                    self.running.is_none(),
+                    egui::Slider::new(&mut self.timeout, 1..=60).suffix(" s"),
+                );
             });
         });
 
@@ -319,12 +349,22 @@ impl RedPulseApp {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             let can_start = self.running.is_none() && !self.target.trim().is_empty();
-            if ui.add_enabled(can_start, egui::Button::new("▶  Start test")
-                .fill(egui::Color32::from_rgb(25, 135, 90))).clicked() {
+            if ui
+                .add_enabled(
+                    can_start,
+                    egui::Button::new("▶  Start test").fill(egui::Color32::from_rgb(25, 135, 90)),
+                )
+                .clicked()
+            {
                 self.start_test();
             }
-            if ui.add_enabled(self.running.is_some(), egui::Button::new("■  Stop")
-                .fill(egui::Color32::from_rgb(160, 55, 65))).clicked() {
+            if ui
+                .add_enabled(
+                    self.running.is_some(),
+                    egui::Button::new("■  Stop").fill(egui::Color32::from_rgb(160, 55, 65)),
+                )
+                .clicked()
+            {
                 self.stop_test();
             }
             if ui.button("Clear results").clicked() && self.running.is_none() {
@@ -364,7 +404,8 @@ impl RedPulseApp {
 
         ui.add_space(12.0);
         ui.heading("Response time");
-        let points: PlotPoints = self.recent_latencies
+        let points: PlotPoints = self
+            .recent_latencies
             .iter()
             .map(|(x, y)| [*x, *y])
             .collect();
@@ -407,35 +448,47 @@ impl RedPulseApp {
             self.total_server_errors,
             self.total_network_errors
         ));
-        ui.label(format!("Average {avg:.2} ms · P50 {p50:.2} ms · P95 {p95:.2} ms · P99 {p99:.2} ms"));
+        ui.label(format!(
+            "Average {avg:.2} ms · P50 {p50:.2} ms · P95 {p95:.2} ms · P99 {p99:.2} ms"
+        ));
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("sample_table").striped(true).show(ui, |ui| {
-                for heading in ["Elapsed", "Status", "Latency", "Bytes", "Result"] {
-                    ui.strong(heading);
-                }
-                ui.end_row();
-
-                for sample in self.samples.iter().rev().take(500) {
-                    ui.label(format!("{:.2}s", sample.elapsed_ms as f64 / 1000.0));
-                    let color = if sample.status >= 500 || sample.status == 0 {
-                        egui::Color32::LIGHT_RED
-                    } else if sample.status >= 400 {
-                        egui::Color32::YELLOW
-                    } else {
-                        egui::Color32::LIGHT_GREEN
-                    };
-                    ui.colored_label(
-                        color,
-                        if sample.status == 0 { "ERR".into() } else { sample.status.to_string() },
-                    );
-                    ui.label(format!("{:.1} ms", sample.latency_ms));
-                    ui.label(sample.bytes.to_string());
-                    ui.label(sample.error.as_deref().unwrap_or(if sample.ok { "OK" } else { "HTTP error" }));
+            egui::Grid::new("sample_table")
+                .striped(true)
+                .show(ui, |ui| {
+                    for heading in ["Elapsed", "Status", "Latency", "Bytes", "Result"] {
+                        ui.strong(heading);
+                    }
                     ui.end_row();
-                }
-            });
+
+                    for sample in self.samples.iter().rev().take(500) {
+                        ui.label(format!("{:.2}s", sample.elapsed_ms as f64 / 1000.0));
+                        let color = if sample.status >= 500 || sample.status == 0 {
+                            egui::Color32::LIGHT_RED
+                        } else if sample.status >= 400 {
+                            egui::Color32::YELLOW
+                        } else {
+                            egui::Color32::LIGHT_GREEN
+                        };
+                        ui.colored_label(
+                            color,
+                            if sample.status == 0 {
+                                "ERR".into()
+                            } else {
+                                sample.status.to_string()
+                            },
+                        );
+                        ui.label(format!("{:.1} ms", sample.latency_ms));
+                        ui.label(sample.bytes.to_string());
+                        ui.label(sample.error.as_deref().unwrap_or(if sample.ok {
+                            "OK"
+                        } else {
+                            "HTTP error"
+                        }));
+                        ui.end_row();
+                    }
+                });
         });
     }
 
@@ -467,18 +520,31 @@ impl eframe::App for RedPulseApp {
             .default_width(175.0)
             .show(ctx, |ui| {
                 ui.add_space(12.0);
-                if ui.selectable_label(self.tab == Tab::Tester, "◉  Tester").clicked() {
+                if ui
+                    .selectable_label(self.tab == Tab::Tester, "◉  Tester")
+                    .clicked()
+                {
                     self.tab = Tab::Tester;
                 }
-                if ui.selectable_label(self.tab == Tab::Results, "▤  Results").clicked() {
+                if ui
+                    .selectable_label(self.tab == Tab::Results, "▤  Results")
+                    .clicked()
+                {
                     self.tab = Tab::Results;
                 }
-                if ui.selectable_label(self.tab == Tab::About, "ⓘ  About").clicked() {
+                if ui
+                    .selectable_label(self.tab == Tab::About, "ⓘ  About")
+                    .clicked()
+                {
                     self.tab = Tab::About;
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.separator();
-                    ui.label(egui::RichText::new("REDPULSE 0.1.0").small().color(egui::Color32::GRAY));
+                    ui.label(
+                        egui::RichText::new("REDPULSE 0.1.0")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                 });
             });
 

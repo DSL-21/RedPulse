@@ -40,7 +40,10 @@ pub fn export_json(
 
 pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     let mut file = File::create(path).context("Could not create CSV file")?;
-    writeln!(file, "elapsed_ms,latency_ms,status,bytes,ok,error,timestamp")?;
+    writeln!(
+        file,
+        "elapsed_ms,latency_ms,status,bytes,ok,error,timestamp"
+    )?;
     for sample in samples {
         let error = sample.error.as_deref().unwrap_or("").replace('"', "\"\"");
         writeln!(

@@ -1,8 +1,8 @@
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
-        Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -90,10 +90,14 @@ fn validate(config: &TestConfig) -> Result<(), String> {
         return Err(format!("Workers must be between 1 and {MAX_WORKERS}."));
     }
     if !(1..=MAX_RPS).contains(&config.max_requests_per_second) {
-        return Err(format!("Request rate must be between 1 and {MAX_RPS} requests/second."));
+        return Err(format!(
+            "Request rate must be between 1 and {MAX_RPS} requests/second."
+        ));
     }
     if !(1..=MAX_DURATION_SECS).contains(&config.duration_secs) {
-        return Err(format!("Duration must be between 1 and {MAX_DURATION_SECS} seconds."));
+        return Err(format!(
+            "Duration must be between 1 and {MAX_DURATION_SECS} seconds."
+        ));
     }
     if !(1..=60).contains(&config.timeout_secs) {
         return Err("Timeout must be between 1 and 60 seconds.".into());
@@ -115,7 +119,11 @@ pub fn start(config: TestConfig) -> Result<TestHandle, String> {
         .spawn(move || run_engine(config, thread_stop, tx))
         .map_err(|error| format!("Could not start engine: {error}"))?;
 
-    Ok(TestHandle { stop, rx, join: Some(join) })
+    Ok(TestHandle {
+        stop,
+        rx,
+        join: Some(join),
+    })
 }
 
 fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>) {
@@ -334,9 +342,7 @@ mod tests {
             let mut request = [0u8; 2048];
             let _ = stream.read(&mut request);
             stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-                )
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .expect("write response");
             stream.flush().expect("flush response");
         });
@@ -369,6 +375,9 @@ mod tests {
 
         handle.join();
         server.join().expect("local test server thread");
-        assert!(received_sample, "engine should emit at least one HTTP sample");
+        assert!(
+            received_sample,
+            "engine should emit at least one HTTP sample"
+        );
     }
 }
