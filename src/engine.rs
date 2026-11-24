@@ -554,7 +554,7 @@ mod tests {
             let _ = stream.read(&mut request);
             thread::sleep(Duration::from_millis(2_500));
             let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nok",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
             );
         });
 
