@@ -386,8 +386,7 @@ mod tests {
         let mut handle = start(cfg).expect("start local benchmark");
 
         let mut received_sample = false;
-        let mut measured_elapsed = None;
-        loop {
+        let measured_elapsed = loop {
             match handle
                 .rx
                 .recv_timeout(Duration::from_secs(3))
@@ -403,13 +402,10 @@ mod tests {
                     received_sample = true;
                     handle.stop();
                 }
-                EngineEvent::Finished { elapsed_secs, .. } => {
-                    measured_elapsed = Some(elapsed_secs);
-                    break;
-                }
+                EngineEvent::Finished { elapsed_secs, .. } => break elapsed_secs,
                 EngineEvent::Fatal(message) => panic!("engine failed: {message}"),
             }
-        }
+        };
 
         handle.join();
         server.join().expect("local test server thread");
@@ -417,10 +413,9 @@ mod tests {
             received_sample,
             "engine should emit at least one HTTP sample"
         );
-        let elapsed = measured_elapsed.expect("engine should report its elapsed time");
-        assert!(elapsed.is_finite() && elapsed > 0.0);
+        assert!(measured_elapsed.is_finite() && measured_elapsed > 0.0);
         assert!(
-            elapsed < 5.0,
+            measured_elapsed < 5.0,
             "manual stop should end before the configured deadline"
         );
     }
