@@ -1,6 +1,6 @@
 [package]
 name = "redpulse"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Native Rust high-performance HTTP load testing and resilience workbench"
 license = "MIT"
