@@ -101,7 +101,7 @@ Reports are written to the application's current working directory using the nam
 
 ## Project status
 
-RedPulse 0.1.0 is the first public release. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are not part of this initial version.
+RedPulse 0.1.1 is the second public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, even after the sliders are changed for a future test. JSON reports include this exact run profile. Network failures show a more detailed error chain to distinguish timeouts, connection failures and lower-level causes. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are not part of this initial version.
 
 ## License
 
