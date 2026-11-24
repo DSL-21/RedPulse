@@ -6,39 +6,31 @@ use serde::Serialize;
 use crate::engine::Sample;
 
 #[derive(Serialize)]
+pub struct RunConfig<'a> {
+    pub target: &'a str,
+    pub method: &'a str,
+    pub workers: usize,
+    pub duration_secs: u64,
+    pub request_rate: u32,
+    pub timeout_secs: u64,
+}
+
+#[derive(Serialize)]
 struct Report<'a> {
     application: &'static str,
     version: &'static str,
     generated_at: String,
-    target: &'a str,
-    method: &'a str,
-    workers: usize,
-    duration_secs: u64,
-    request_rate: u32,
-    timeout_secs: u64,
+    #[serde(flatten)]
+    config: &'a RunConfig<'a>,
     samples: &'a [Sample],
 }
 
-pub fn export_json(
-    path: &Path,
-    target: &str,
-    method: &str,
-    workers: usize,
-    duration_secs: u64,
-    request_rate: u32,
-    timeout_secs: u64,
-    samples: &[Sample],
-) -> Result<()> {
+pub fn export_json(path: &Path, config: &RunConfig<'_>, samples: &[Sample]) -> Result<()> {
     let report = Report {
         application: "RedPulse",
         version: env!("CARGO_PKG_VERSION"),
         generated_at: chrono::Utc::now().to_rfc3339(),
-        target,
-        method,
-        workers,
-        duration_secs,
-        request_rate,
-        timeout_secs,
+        config,
         samples,
     };
     let mut file = File::create(path).context("Could not create report file")?;
