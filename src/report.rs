@@ -13,6 +13,9 @@ struct Report<'a> {
     target: &'a str,
     method: &'a str,
     workers: usize,
+    duration_secs: u64,
+    request_rate: u32,
+    timeout_secs: u64,
     samples: &'a [Sample],
 }
 
@@ -21,6 +24,9 @@ pub fn export_json(
     target: &str,
     method: &str,
     workers: usize,
+    duration_secs: u64,
+    request_rate: u32,
+    timeout_secs: u64,
     samples: &[Sample],
 ) -> Result<()> {
     let report = Report {
@@ -30,6 +36,9 @@ pub fn export_json(
         target,
         method,
         workers,
+        duration_secs,
+        request_rate,
+        timeout_secs,
         samples,
     };
     let mut file = File::create(path).context("Could not create report file")?;
