@@ -9,7 +9,7 @@ use egui_plot::{Line, Plot, PlotPoints};
 use hdrhistogram::Histogram;
 
 use crate::{
-    engine::{self, EngineEvent, EngineStats, Sample, TestConfig, TestHandle},
+    engine::{self, EngineEvent, EngineStats, LoadModel, Sample, TestConfig, TestHandle},
     report,
 };
 
@@ -47,9 +47,11 @@ fn classify_status(status: u16) -> ResponseClass {
 struct RunSnapshot {
     target: String,
     method: String,
+    load_model: LoadModel,
     workers: usize,
     duration_secs: u64,
-    request_rate: u32,
+    request_rate: Option<u32>,
+    load_model: LoadModel,
     timeout_secs: u64,
     actual_elapsed_secs: f64,
 }
@@ -114,6 +116,7 @@ impl RedPulseApp {
             tab: Tab::Tester,
             target: "https://example.com/".into(),
             method: "GET".into(),
+            load_model: LoadModel::ConstantArrivalRate,
             workers: 5,
             duration: 30,
             rps: 5,
@@ -170,6 +173,7 @@ impl RedPulseApp {
         let config = TestConfig {
             url: self.target.trim().to_string(),
             method: self.method.clone(),
+            load_model: self.load_model,
             workers: self.workers,
             duration_secs: self.duration,
             max_requests_per_second: self.rps,
@@ -182,7 +186,9 @@ impl RedPulseApp {
             method: config.method.clone(),
             workers: config.workers,
             duration_secs: config.duration_secs,
-            request_rate: config.max_requests_per_second,
+            request_rate: (config.load_model == LoadModel::ConstantArrivalRate)
+                .then_some(config.max_requests_per_second),
+            load_model: config.load_model,
             timeout_secs: config.timeout_secs,
             actual_elapsed_secs: 0.0,
         };
@@ -346,6 +352,7 @@ impl RedPulseApp {
                 workers: run.workers,
                 duration_secs: run.duration_secs,
                 request_rate: run.request_rate,
+                load_model: run.load_model,
                 timeout_secs: run.timeout_secs,
                 actual_elapsed_secs: run.actual_elapsed_secs,
                 stats: self.engine_stats,
@@ -472,6 +479,30 @@ impl RedPulseApp {
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
+            ui.label("Load model");
+            egui::ComboBox::from_id_salt("load_model")
+                .selected_text(self.load_model.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.load_model,
+                        LoadModel::ConstantArrivalRate,
+                        "Constant Arrival Rate",
+                    );
+                    ui.selectable_value(
+                        &mut self.load_model,
+                        LoadModel::ClosedLoop,
+                        "Closed Loop",
+                    );
+                });
+            ui.label(
+                egui::RichText::new(self.load_model.description())
+                    .small()
+                    .color(egui::Color32::from_rgb(137, 157, 181)),
+            );
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label("Method");
                 egui::ComboBox::from_id_salt("method")
@@ -499,9 +530,10 @@ impl RedPulseApp {
             });
             ui.add_space(16.0);
             ui.vertical(|ui| {
-                ui.label("Request rate");
+                ui.label("Arrival rate");
                 ui.add_enabled(
-                    self.running.is_none(),
+                    self.running.is_none()
+                        && self.load_model == LoadModel::ConstantArrivalRate,
                     egui::Slider::new(&mut self.rps, 1..=200).suffix(" req/s"),
                 );
             });
@@ -514,6 +546,16 @@ impl RedPulseApp {
                 );
             });
         });
+
+        if self.load_model == LoadModel::ClosedLoop {
+            ui.label(
+                egui::RichText::new(
+                    "Closed Loop uses worker count as the concurrency limit; the arrival-rate slider is not used.",
+                )
+                .small()
+                .color(egui::Color32::from_rgb(137, 157, 181)),
+            );
+        }
 
         if self.method == "POST" {
             ui.add_space(8.0);
@@ -714,12 +756,17 @@ impl RedPulseApp {
                             .strong()
                             .color(egui::Color32::from_rgb(105, 190, 250)),
                     );
+                    let rate_description = run
+                        .request_rate
+                        .map(|rate| format!("{rate} req/s arrival target"))
+                        .unwrap_or_else(|| "throughput determined by workers".into());
                     ui.label(format!(
-                        "{} · {} workers · {} s configured · {} req/s cap · {} s timeout · {:.3} s measured",
+                        "{} · {} · {} workers · {} s configured · {} · {} s timeout · {:.3} s measured",
                         run.method,
+                        run.load_model.label(),
                         run.workers,
                         run.duration_secs,
-                        run.request_rate,
+                        rate_description,
                         run.timeout_secs,
                         run.actual_elapsed_secs
                     ));
@@ -829,8 +876,9 @@ impl RedPulseApp {
         ui.label("Metrics: response status, throughput and latency percentiles");
         ui.label("Reports: JSON and CSV");
         ui.separator();
-        ui.label("The arrival scheduler runs independently from the HTTP workers.");
-        ui.label("A bounded queue reports overload as dropped arrivals instead of delaying future slots.");
+        ui.label("Constant Arrival Rate schedules requests independently from HTTP worker completion.");
+        ui.label("Closed Loop lets each worker repeat only after its previous request completes.");
+        ui.label("A bounded queue reports constant-rate overload as dropped arrivals instead of delaying future slots.");
         ui.label("Redirect following is disabled; each sample measures the configured endpoint response.");
     }
 }
@@ -941,5 +989,17 @@ mod response_class_tests {
     fn classifies_transport_errors_and_unusual_statuses() {
         assert_eq!(classify_status(0), ResponseClass::NetworkError);
         assert_eq!(classify_status(101), ResponseClass::Other);
+    }
+}
+
+
+#[cfg(test)]
+mod load_model_ui_tests {
+    use crate::engine::LoadModel;
+
+    #[test]
+    fn load_models_have_clear_user_facing_names() {
+        assert_eq!(LoadModel::ConstantArrivalRate.label(), "Constant Arrival Rate");
+        assert_eq!(LoadModel::ClosedLoop.label(), "Closed Loop");
     }
 }

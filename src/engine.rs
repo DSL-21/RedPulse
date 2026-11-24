@@ -15,10 +15,39 @@ use serde::{Deserialize, Serialize};
 use tokio::runtime::Builder;
 use url::Url;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadModel {
+    #[default]
+    ConstantArrivalRate,
+    ClosedLoop,
+}
+
+impl LoadModel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ConstantArrivalRate => "Constant Arrival Rate",
+            Self::ClosedLoop => "Closed Loop",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ConstantArrivalRate => {
+                "Schedules arrivals at a fixed rate; full queues are counted as dropped."
+            }
+            Self::ClosedLoop => {
+                "Each worker starts its next request after the previous request completes."
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TestConfig {
     pub url: String,
     pub method: String,
+    pub load_model: LoadModel,
     pub workers: usize,
     pub duration_secs: u64,
     pub max_requests_per_second: u32,
@@ -148,9 +177,11 @@ fn validate(config: &TestConfig) -> Result<(), String> {
     if !(1..=MAX_WORKERS).contains(&config.workers) {
         return Err(format!("Workers must be between 1 and {MAX_WORKERS}."));
     }
-    if !(1..=MAX_RPS).contains(&config.max_requests_per_second) {
+    if config.load_model == LoadModel::ConstantArrivalRate
+        && !(1..=MAX_RPS).contains(&config.max_requests_per_second)
+    {
         return Err(format!(
-            "Request rate must be between 1 and {MAX_RPS} requests/second."
+            "Arrival rate must be between 1 and {MAX_RPS} requests/second."
         ));
     }
     if !(1..=MAX_DURATION_SECS).contains(&config.duration_secs) {
@@ -267,6 +298,35 @@ fn overdue_slots(now: Instant, next_slot: Instant, interval: Duration) -> u64 {
     }
 }
 
+async fn perform_request(
+    client: &Client,
+    method: Method,
+    url: &str,
+    body: &str,
+    run_started: Instant,
+    deadline: Instant,
+    stop: Arc<AtomicBool>,
+) -> Option<Sample> {
+    let request_started = Instant::now();
+    let tokio_deadline = tokio::time::Instant::from_std(deadline);
+
+    let result = tokio::select! {
+        _ = wait_for_stop(Arc::clone(&stop)) => None,
+        _ = tokio::time::sleep_until(tokio_deadline) => None,
+        response = execute_request(client, method, url, body) => Some(response),
+    };
+
+    result.map(|(status, bytes, ok, error)| Sample {
+        elapsed_ms: run_started.elapsed().as_millis() as u64,
+        latency_ms: request_started.elapsed().as_secs_f64() * 1000.0,
+        status,
+        bytes,
+        ok,
+        error,
+        timestamp: Utc::now(),
+    })
+}
+
 fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>) {
     let runtime = match Builder::new_multi_thread()
         .worker_threads(config.workers.clamp(2, 8))
@@ -307,137 +367,175 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         let deadline = started + Duration::from_secs(config.duration_secs);
         let _ = tx.send(EngineEvent::Started { at: started });
 
-        let interval = Duration::from_secs_f64(1.0 / config.max_requests_per_second as f64);
-        let queue_capacity = config
-            .workers
-            .saturating_mul(2)
-            .clamp(2, MAX_QUEUE_CAPACITY);
-        let (job_tx, job_rx) = tokio::sync::mpsc::channel::<()>(queue_capacity);
-        let job_rx = Arc::new(tokio::sync::Mutex::new(job_rx));
         let counters = Arc::new(Counters::default());
         let mut tasks = tokio::task::JoinSet::new();
+        let mut scheduler = None;
 
-        // Workers consume an independently scheduled stream of request jobs.
-        // The bounded queue prevents unbounded memory growth when the target
-        // responds more slowly than the configured arrival rate.
-        for _ in 0..config.workers {
-            let client = client.clone();
-            let worker_tx = tx.clone();
-            let worker_stop = Arc::clone(&stop);
-            let worker_rx = Arc::clone(&job_rx);
-            let worker_counters = Arc::clone(&counters);
-            let url = config.url.clone();
-            let body = config.body.clone();
-            let method = method.clone();
+        match config.load_model {
+            LoadModel::ConstantArrivalRate => {
+                let interval =
+                    Duration::from_secs_f64(1.0 / config.max_requests_per_second as f64);
+                let queue_capacity = config
+                    .workers
+                    .saturating_mul(2)
+                    .clamp(2, MAX_QUEUE_CAPACITY);
+                let (job_tx, job_rx) = tokio::sync::mpsc::channel::<()>(queue_capacity);
+                let job_rx = Arc::new(tokio::sync::Mutex::new(job_rx));
 
-            tasks.spawn(async move {
-                let tokio_deadline = tokio::time::Instant::from_std(deadline);
+                // Fixed-rate arrivals are scheduled independently of worker
+                // completion. The bounded queue makes overload measurable.
+                for _ in 0..config.workers {
+                    let client = client.clone();
+                    let worker_tx = tx.clone();
+                    let worker_stop = Arc::clone(&stop);
+                    let worker_rx = Arc::clone(&job_rx);
+                    let worker_counters = Arc::clone(&counters);
+                    let url = config.url.clone();
+                    let body = config.body.clone();
+                    let method = method.clone();
 
-                loop {
-                    let next_job = async {
-                        let mut receiver = worker_rx.lock().await;
-                        receiver.recv().await
-                    };
+                    tasks.spawn(async move {
+                        loop {
+                            let next_job = async {
+                                let mut receiver = worker_rx.lock().await;
+                                receiver.recv().await
+                            };
 
-                    let job = tokio::select! {
-                        _ = wait_for_stop(Arc::clone(&worker_stop)) => None,
-                        _ = tokio::time::sleep_until(tokio_deadline) => None,
-                        job = next_job => job,
-                    };
+                            let tokio_deadline = tokio::time::Instant::from_std(deadline);
+                            let job = tokio::select! {
+                                _ = wait_for_stop(Arc::clone(&worker_stop)) => None,
+                                _ = tokio::time::sleep_until(tokio_deadline) => None,
+                                job = next_job => job,
+                            };
 
-                    if job.is_none()
-                        || worker_stop.load(Ordering::Relaxed)
-                        || Instant::now() >= deadline
-                    {
-                        break;
-                    }
+                            if job.is_none()
+                                || worker_stop.load(Ordering::Relaxed)
+                                || Instant::now() >= deadline
+                            {
+                                break;
+                            }
 
-                    worker_counters.started.fetch_add(1, Ordering::Relaxed);
-                    emit_stats(&worker_tx, &worker_counters);
+                            worker_counters.started.fetch_add(1, Ordering::Relaxed);
+                            emit_stats(&worker_tx, &worker_counters);
 
-                    let request_started = Instant::now();
-                    let request_future = execute_request(&client, method.clone(), &url, &body);
+                            let Some(sample) = perform_request(
+                                &client,
+                                method.clone(),
+                                &url,
+                                &body,
+                                started,
+                                deadline,
+                                Arc::clone(&worker_stop),
+                            )
+                            .await else {
+                                break;
+                            };
 
-                    let result = tokio::select! {
-                        _ = wait_for_stop(Arc::clone(&worker_stop)) => None,
-                        _ = tokio::time::sleep_until(tokio_deadline) => None,
-                        response = request_future => Some(response),
-                    };
-
-                    let Some((status, bytes, ok, error)) = result else {
-                        break;
-                    };
-
-                    let sample = Sample {
-                        elapsed_ms: started.elapsed().as_millis() as u64,
-                        latency_ms: request_started.elapsed().as_secs_f64() * 1000.0,
-                        status,
-                        bytes,
-                        ok,
-                        error,
-                        timestamp: Utc::now(),
-                    };
-
-                    worker_counters.completed.fetch_add(1, Ordering::Relaxed);
-                    if worker_tx.send(EngineEvent::Sample(sample)).is_err() {
-                        worker_stop.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    emit_stats(&worker_tx, &worker_counters);
+                            worker_counters.completed.fetch_add(1, Ordering::Relaxed);
+                            if worker_tx.send(EngineEvent::Sample(sample)).is_err() {
+                                worker_stop.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            emit_stats(&worker_tx, &worker_counters);
+                        }
+                    });
                 }
-            });
+
+                let scheduler_stop = Arc::clone(&stop);
+                let scheduler_counters = Arc::clone(&counters);
+                let scheduler_tx = tx.clone();
+                scheduler = Some(tokio::spawn(async move {
+                    let mut next_slot = started;
+                    loop {
+                        tokio::select! {
+                            _ = wait_for_stop(Arc::clone(&scheduler_stop)) => break,
+                            _ = tokio::time::sleep_until(
+                                tokio::time::Instant::from_std(next_slot)
+                            ) => {},
+                        }
+
+                        if scheduler_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                            break;
+                        }
+
+                        // Missed slots are accounted as dropped; no catch-up burst.
+                        let overdue = overdue_slots(Instant::now(), next_slot, interval);
+                        if overdue > 0 {
+                            scheduler_counters
+                                .scheduled
+                                .fetch_add(overdue, Ordering::Relaxed);
+                            scheduler_counters
+                                .dropped
+                                .fetch_add(overdue, Ordering::Relaxed);
+                            next_slot += interval * overdue.min(u32::MAX as u64) as u32;
+                            emit_stats(&scheduler_tx, &scheduler_counters);
+                        }
+
+                        if next_slot >= deadline {
+                            break;
+                        }
+
+                        scheduler_counters.scheduled.fetch_add(1, Ordering::Relaxed);
+                        if job_tx.try_send(()).is_err() {
+                            scheduler_counters.dropped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        emit_stats(&scheduler_tx, &scheduler_counters);
+                        next_slot += interval;
+                    }
+                }));
+            }
+            LoadModel::ClosedLoop => {
+                // Closed-loop mode has no arrival timer or waiting queue.
+                // Each worker sends its next request only after the previous
+                // request has fully completed, so throughput emerges from
+                // worker count and observed response time.
+                for _ in 0..config.workers {
+                    let client = client.clone();
+                    let worker_tx = tx.clone();
+                    let worker_stop = Arc::clone(&stop);
+                    let worker_counters = Arc::clone(&counters);
+                    let url = config.url.clone();
+                    let body = config.body.clone();
+                    let method = method.clone();
+
+                    tasks.spawn(async move {
+                        loop {
+                            if worker_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                                break;
+                            }
+
+                            worker_counters.scheduled.fetch_add(1, Ordering::Relaxed);
+                            worker_counters.started.fetch_add(1, Ordering::Relaxed);
+                            emit_stats(&worker_tx, &worker_counters);
+
+                            let Some(sample) = perform_request(
+                                &client,
+                                method.clone(),
+                                &url,
+                                &body,
+                                started,
+                                deadline,
+                                Arc::clone(&worker_stop),
+                            )
+                            .await else {
+                                break;
+                            };
+
+                            worker_counters.completed.fetch_add(1, Ordering::Relaxed);
+                            if worker_tx.send(EngineEvent::Sample(sample)).is_err() {
+                                worker_stop.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            emit_stats(&worker_tx, &worker_counters);
+                        }
+                    });
+                }
+            }
         }
 
-        // The scheduler is independent of worker completion. It attempts one
-        // arrival at each monotonic time slot and never creates catch-up bursts.
-        let scheduler_stop = Arc::clone(&stop);
-        let scheduler_counters = Arc::clone(&counters);
-        let scheduler_tx = tx.clone();
-        let scheduler = tokio::spawn(async move {
-            let mut next_slot = started;
-            loop {
-                tokio::select! {
-                    _ = wait_for_stop(Arc::clone(&scheduler_stop)) => break,
-                    _ = tokio::time::sleep_until(
-                        tokio::time::Instant::from_std(next_slot)
-                    ) => {},
-                }
-
-                if scheduler_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
-                    break;
-                }
-
-                // If the scheduler itself wakes late, account for missed
-                // arrival slots as dropped instead of sending a burst.
-                let overdue = overdue_slots(Instant::now(), next_slot, interval);
-                if overdue > 0 {
-                    scheduler_counters
-                        .scheduled
-                        .fetch_add(overdue, Ordering::Relaxed);
-                    scheduler_counters
-                        .dropped
-                        .fetch_add(overdue, Ordering::Relaxed);
-                    next_slot += interval * overdue.min(u32::MAX as u64) as u32;
-                    emit_stats(&scheduler_tx, &scheduler_counters);
-                }
-
-                if next_slot >= deadline {
-                    break;
-                }
-
-                scheduler_counters.scheduled.fetch_add(1, Ordering::Relaxed);
-                // try_send is deliberately non-blocking. A full queue is an
-                // explicit dropped arrival, not a delay to later arrivals.
-                if job_tx.try_send(()).is_err() {
-                    scheduler_counters.dropped.fetch_add(1, Ordering::Relaxed);
-                }
-                emit_stats(&scheduler_tx, &scheduler_counters);
-
-                next_slot += interval;
-            }
-        });
-
-        let _ = scheduler.await;
+        if let Some(scheduler) = scheduler {
+            let _ = scheduler.await;
+        }
         while let Some(result) = tasks.join_next().await {
             if let Err(error) = result {
                 let _ = tx.send(EngineEvent::Fatal(format!("Worker task failed: {error}")));
@@ -468,6 +566,7 @@ mod tests {
         TestConfig {
             url: url.into(),
             method: "GET".into(),
+            load_model: LoadModel::ConstantArrivalRate,
             workers: 2,
             duration_secs: 10,
             max_requests_per_second: 5,
@@ -499,10 +598,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_excessive_request_rate() {
+    fn rejects_excessive_request_rate_for_constant_arrivals() {
         let mut cfg = config("https://example.com");
         cfg.max_requests_per_second = MAX_RPS + 1;
         assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn closed_loop_does_not_require_an_arrival_rate() {
+        let mut cfg = config("https://example.com");
+        cfg.load_model = LoadModel::ClosedLoop;
+        cfg.max_requests_per_second = 0;
+        assert!(validate(&cfg).is_ok());
     }
 
     #[test]
@@ -541,6 +648,67 @@ mod tests {
         assert_eq!(finished.in_flight, 0);
         assert_eq!(finished.cancelled, 2);
         assert_eq!(finished.dropped, 1);
+    }
+
+    #[test]
+    fn closed_loop_workers_repeat_after_each_response() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind closed-loop test server");
+        listener
+            .set_nonblocking(true)
+            .expect("set nonblocking listener");
+        let address = listener.local_addr().expect("local server address");
+        let server_stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&server_stop);
+        let server = thread::spawn(move || {
+            while !thread_stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut request = [0u8; 2048];
+                        let _ = stream.read(&mut request);
+                        thread::sleep(Duration::from_millis(20));
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let mut cfg = config(&format!("http://{address}/"));
+        cfg.load_model = LoadModel::ClosedLoop;
+        cfg.workers = 2;
+        cfg.duration_secs = 1;
+        cfg.max_requests_per_second = 0;
+        cfg.timeout_secs = 2;
+        let mut handle = start(cfg).expect("start closed-loop benchmark");
+
+        let stats = loop {
+            match handle
+                .rx
+                .recv_timeout(Duration::from_secs(4))
+                .expect("receive closed-loop event")
+            {
+                EngineEvent::Started { .. } | EngineEvent::Stats(_) | EngineEvent::Sample(_) => {}
+                EngineEvent::Finished { stats, .. } => break stats,
+                EngineEvent::Fatal(message) => panic!("closed-loop engine failed: {message}"),
+            }
+        };
+
+        handle.join();
+        server_stop.store(true, Ordering::Relaxed);
+        server.join().expect("closed-loop test server thread");
+
+        assert!(stats.completed > 10, "workers should repeat completed requests");
+        assert_eq!(stats.scheduled, stats.started);
+        assert_eq!(stats.dropped, 0);
+        assert_eq!(stats.queued, 0);
+        assert_eq!(stats.in_flight, 0);
+        assert_eq!(stats.cancelled, stats.started - stats.completed);
     }
 
     #[test]

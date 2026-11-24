@@ -2,6 +2,19 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.1.5] - 2026-11-24
+
+### Added
+- Explicit Constant Arrival Rate and Closed Loop load models.
+- Closed Loop workers immediately schedule their next request after completing the previous request.
+- Load-model selection and mode-specific guidance in the Tester UI.
+- Load model and optional arrival-rate target in JSON run metadata.
+- Closed Loop validation and local HTTP integration tests.
+
+### Changed
+- Arrival-rate control is disabled and omitted from run metadata in Closed Loop mode.
+- Results identify the load model used for each benchmark.
+
 ## [0.1.4] - 2026-11-24
 
 ### Added

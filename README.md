@@ -18,7 +18,9 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 
 - Native Windows desktop interface using egui / eframe
 - HTTP GET and POST requests
-- Configurable worker count, run duration, global request-rate ceiling and timeout
+- Configurable load model, worker count, run duration, arrival rate and timeout
+- Constant Arrival Rate mode for fixed-time request arrivals
+- Closed Loop mode for worker-paced requests
 - Independent monotonic arrival scheduler with a bounded worker queue
 - Live request count, observed RPS and a fixed, non-interactive response-time chart
 - Min, average, P50, P95, P99 and max HTTP response latency
@@ -44,11 +46,19 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 
 The initial defaults are 5 workers, 30 seconds, 5 requests per second and a 10-second timeout.
 
-## How the engine works
+## Load models
 
-RedPulse starts a Tokio runtime on a dedicated engine thread. A monotonic arrival scheduler runs independently from the asynchronous HTTP workers. It attempts one request arrival at each configured time slot and places accepted jobs into a bounded queue shared by the workers. The rate ceiling is global rather than multiplied by the number of workers. A full queue is recorded as a dropped arrival instead of delaying or bursting later arrivals.
+RedPulse provides two distinct request-generation models.
 
-Worker count controls how many requests may be in flight concurrently. The request-rate setting controls the intended arrival pace independently of response completion time. The queue is capped at twice the worker count (up to 128 jobs). Actual observed throughput can be lower than the configured ceiling when the server, network, or client cannot complete requests quickly enough. The engine reports its own monotonic start instant and measured elapsed duration; the final observed RPS uses that measured duration rather than the GUI refresh interval.
+### Constant Arrival Rate
+
+A monotonic scheduler attempts to create one request arrival at each configured time slot, independently of HTTP response completion. Accepted arrivals enter a bounded queue shared by the workers. The rate ceiling is global rather than multiplied by worker count. A full queue or a missed scheduler slot is recorded as a dropped arrival; RedPulse does not create catch-up bursts. Worker count controls how many requests may be in flight concurrently, while the arrival-rate setting controls the planned pace.
+
+### Closed Loop
+
+Each worker starts its next request only after its previous request has completed. There is no arrival timer and no waiting queue in this mode. Throughput emerges from worker count and observed response time, so slower responses naturally reduce the number of new requests started. The arrival-rate slider is disabled because it does not apply to this model.
+
+Both modes use the same request timeout, response measurement limit, cancellation handling, status classification and latency analytics. Final observed RPS uses the engine's monotonic elapsed duration rather than GUI refresh timing.
 
 For each request, RedPulse records elapsed time, response latency, status code, measured response size, and any transport or body-read error. Run accounting distinguishes scheduled arrivals, started attempts, completed attempts, queued jobs, in-flight requests, cancelled jobs and dropped arrivals. HTTP response latency statistics include HTTP responses (including 4xx and 5xx) and exclude transport failures such as DNS, connection and timeout errors; those failures are counted separately. Redirects are not followed, so a 3xx response is measured directly rather than silently sending another request. The chart plots the most recent HTTP response samples against elapsed time and includes P50/P95 reference lines. It is intentionally non-interactive: zoom, pan, wheel scaling and double-click reset are disabled so the mouse wheel remains available for scrolling the dashboard.
 
@@ -103,7 +113,7 @@ Reports are written to the application's current working directory using the nam
 
 ## Project status
 
-RedPulse 0.1.4 is the fifth public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are not part of this initial version.
+RedPulse 0.1.5 is the sixth public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are planned for later versions.
 
 ## License
 
