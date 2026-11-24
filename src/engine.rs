@@ -315,7 +315,8 @@ fn validate(config: &TestConfig) -> Result<(), String> {
         return Err("Supported methods are GET and POST.".into());
     }
     if !config.backend_id_header.trim().is_empty()
-        && reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes()).is_err()
+        && reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes())
+            .is_err()
     {
         return Err("Backend identity header name is invalid.".into());
     }
@@ -381,8 +382,10 @@ fn describe_reqwest_error(error: &reqwest::Error) -> String {
 }
 
 fn extract_backend_id(headers: &reqwest::header::HeaderMap, header_name: &str) -> Option<String> {
-    let header_name = reqwest::header::HeaderName::from_bytes(header_name.trim().as_bytes()).ok()?;
-    headers.get(header_name)
+    let header_name =
+        reqwest::header::HeaderName::from_bytes(header_name.trim().as_bytes()).ok()?;
+    headers
+        .get(header_name)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -410,8 +413,7 @@ async fn execute_request(
     match request.send().await {
         Ok(mut response) => {
             let status = response.status().as_u16();
-            let backend_id =
-                extract_backend_id(response.headers(), request_spec.backend_id_header);
+            let backend_id = extract_backend_id(response.headers(), request_spec.backend_id_header);
             let mut count = 0usize;
             let mut read_error = None;
 
@@ -434,7 +436,13 @@ async fn execute_request(
             }
 
             let ok = (200..300).contains(&status) && read_error.is_none();
-            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error, backend_id)
+            (
+                status,
+                count.min(MAX_RESPONSE_BYTES),
+                ok,
+                read_error,
+                backend_id,
+            )
         }
         Err(error) => (0, 0, false, Some(describe_reqwest_error(&error)), None),
     }
@@ -842,8 +850,14 @@ mod tests {
     #[test]
     fn backend_identity_header_is_case_insensitive_and_trimmed() {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("x-backend-id", reqwest::header::HeaderValue::from_static("  node-a  "));
-        assert_eq!(extract_backend_id(&headers, "X-Backend-ID"), Some("node-a".into()));
+        headers.insert(
+            "x-backend-id",
+            reqwest::header::HeaderValue::from_static("  node-a  "),
+        );
+        assert_eq!(
+            extract_backend_id(&headers, "X-Backend-ID"),
+            Some("node-a".into())
+        );
         assert_eq!(extract_backend_id(&headers, ""), None);
     }
 
