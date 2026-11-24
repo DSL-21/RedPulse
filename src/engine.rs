@@ -1424,7 +1424,9 @@ mod tests {
             let mut request = [0u8; 2048];
             let _ = stream.read(&mut request);
             stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Backend-ID: node-a\r\nConnection: close\r\n\r\nok",
+                )
                 .expect("write response");
             stream.flush().expect("flush response");
         });
@@ -1449,6 +1451,8 @@ mod tests {
                     for sample in samples {
                         assert_eq!(sample.status, 200);
                         assert_eq!(sample.bytes, 2);
+                        assert_eq!(sample.http_version.as_deref(), Some("HTTP/1.1"));
+                        assert_eq!(sample.backend_id.as_deref(), Some("node-a"));
                         assert!(sample.ok);
                         received_sample = true;
                     }
