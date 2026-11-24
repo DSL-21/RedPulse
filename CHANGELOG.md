@@ -2,6 +2,27 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.5.0] - 2026-11-24
+
+### Added
+- Live once-per-second hardware telemetry for average host CPU, RedPulse process CPU, host RAM, process memory, and host-wide network RX/TX throughput.
+- CPU headroom diagnostics that warn when the machine or RedPulse process may be limiting the generated load.
+- HTTP/2 support through Reqwest and negotiated HTTP protocol attribution for each response.
+- Negotiated HTTP version in the Results table, JSON samples, and CSV reports.
+- Hardware sample history in JSON reports, bounded to the most recent 1,800 samples.
+
+### Improved
+- Replaced the shared async-mutex worker receiver with a bounded multi-consumer request queue.
+- Batched up to 64 response samples, with a 50 ms flush interval, before forwarding results to the GUI.
+- Published live request counters every 250 ms instead of emitting a statistics event for every arrival and response.
+- Measured run duration before auxiliary telemetry shutdown so hardware-monitor cleanup does not inflate reported RPS.
+- Kept request samples and hardware history bounded to protect memory during long test runs.
+
+### Notes
+- Host network throughput is summed from visible host interfaces and is not attributed exclusively to RedPulse.
+- HTTP/3 is not enabled in this stable build.
+- CPU headroom is a diagnostic heuristic; controlled cross-tool benchmarks are still required before making performance superiority claims.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added
