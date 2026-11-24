@@ -13,6 +13,7 @@ pub struct RunConfig<'a> {
     pub duration_secs: u64,
     pub request_rate: u32,
     pub timeout_secs: u64,
+    pub actual_elapsed_secs: f64,
 }
 
 #[derive(Serialize)]
