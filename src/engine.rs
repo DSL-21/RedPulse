@@ -976,6 +976,9 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 let _ = tx.send(EngineEvent::Fatal(format!("Worker task failed: {error}")));
             }
         }
+        // Capture the measured workload duration before joining telemetry
+        // helpers so monitor shutdown cannot inflate observed RPS.
+        let measured_elapsed_secs = started.elapsed().as_secs_f64();
         drop(sample_tx);
         let _ = sample_publisher.await;
         if let Some(monitor) = hardware_monitor {
@@ -986,7 +989,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         let stats = counters.final_snapshot();
         let _ = tx.send(EngineEvent::Finished {
             stopped: stop.load(Ordering::Relaxed),
-            elapsed_secs: started.elapsed().as_secs_f64(),
+            elapsed_secs: measured_elapsed_secs,
             stats,
         });
     });
