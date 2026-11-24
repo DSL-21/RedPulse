@@ -3,7 +3,7 @@ use std::{fs::File, io::Write, path::Path};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::engine::{EngineStats, Sample};
+use crate::engine::{DnsStrategy, EngineStats, Sample};
 
 #[derive(Serialize)]
 pub struct RunConfig<'a> {
@@ -16,6 +16,8 @@ pub struct RunConfig<'a> {
     pub timeout_secs: u64,
     pub actual_elapsed_secs: f64,
     pub max_total_requests: u64,
+    pub dns_strategy: DnsStrategy,
+    pub resolved_addresses: &'a [String],
     pub stats: EngineStats,
 }
 
@@ -58,18 +60,20 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     let mut file = File::create(path).context("Could not create CSV file")?;
     writeln!(
         file,
-        "elapsed_us,elapsed_ms,latency_ms,status,status_class,bytes,ok,error,timestamp"
+        "elapsed_us,elapsed_ms,latency_ms,status,status_class,endpoint_ip,bytes,ok,error,timestamp"
     )?;
     for sample in samples {
-        let error = sample.error.as_deref().unwrap_or("").replace('"', "\"\"");
+        let error = sample.error.as_deref().unwrap_or("").replace('"', "\""");
+        let endpoint_ip = sample.endpoint_ip.as_deref().unwrap_or("");
         writeln!(
             file,
-            "{},{},{:.3},{},{},{},{},\"{}\",{}",
+            "{},{},{:.3},{},{},\"{}\",{},{},\"{}\",{}",
             sample.elapsed_us,
             sample.elapsed_ms,
             sample.latency_ms,
             sample.status,
             status_class(sample.status),
+            endpoint_ip,
             sample.bytes,
             sample.ok,
             error,

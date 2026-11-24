@@ -1,5 +1,7 @@
 use std::{
+    collections::BTreeSet,
     error::Error as StdError,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -43,11 +45,38 @@ impl LoadModel {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsStrategy {
+    #[default]
+    System,
+    RoundRobin,
+}
+
+impl DnsStrategy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System DNS",
+            Self::RoundRobin => "Round-robin DNS IPs",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::System => "Uses the normal system resolver and the standard HTTP client pool.",
+            Self::RoundRobin => {
+                "Resolves the hostname once and pins successive requests to each resolved IP."
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TestConfig {
     pub url: String,
     pub method: String,
     pub load_model: LoadModel,
+    pub dns_strategy: DnsStrategy,
     pub workers: usize,
     pub duration_secs: u64,
     pub max_requests_per_second: u64,
@@ -74,6 +103,7 @@ pub struct Sample {
     pub elapsed_ms: u64,
     pub latency_ms: f64,
     pub status: u16,
+    pub endpoint_ip: Option<String>,
     pub bytes: usize,
     pub ok: bool,
     pub error: Option<String>,
@@ -82,6 +112,9 @@ pub struct Sample {
 
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
+    OriginsResolved {
+        addresses: Vec<String>,
+    },
     Started {
         at: Instant,
     },
@@ -167,6 +200,85 @@ impl Counters {
 
 fn emit_stats(tx: &Sender<EngineEvent>, counters: &Counters) {
     let _ = tx.send(EngineEvent::Stats(counters.snapshot()));
+}
+
+#[derive(Clone)]
+struct OriginRoute {
+    client: Client,
+    ip: Option<IpAddr>,
+}
+
+fn resolve_origin_ips(url: &Url) -> Result<Vec<IpAddr>, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "The target URL does not contain a hostname.".to_string())?;
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(vec![ip]);
+    }
+
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "The target URL does not have a known port.".to_string())?;
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|error| format!("Could not resolve {host}: {error}"))?;
+
+    let unique: BTreeSet<IpAddr> = addresses.map(|address| address.ip()).collect();
+    if unique.is_empty() {
+        return Err(format!("DNS returned no IP addresses for {host}."));
+    }
+
+    Ok(unique.into_iter().collect())
+}
+
+fn build_origin_routes(
+    config: &TestConfig,
+    url: &Url,
+) -> Result<(Vec<OriginRoute>, Vec<String>), String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "The target URL does not contain a hostname.".to_string())?;
+    let ips = match config.dns_strategy {
+        DnsStrategy::System => Vec::new(),
+        DnsStrategy::RoundRobin => resolve_origin_ips(url)?,
+    };
+    let resolved_addresses: Vec<String> = ips.iter().map(ToString::to_string).collect();
+    let route_ips: Vec<Option<IpAddr>> = if ips.is_empty() {
+        vec![None]
+    } else {
+        ips.into_iter().map(Some).collect()
+    };
+
+    let mut routes = Vec::with_capacity(route_ips.len());
+    for ip in route_ips {
+        let mut builder = Client::builder()
+            .connect_timeout(Duration::from_secs(config.timeout_secs))
+            .timeout(Duration::from_secs(config.timeout_secs))
+            .redirect(reqwest::redirect::Policy::none())
+            .pool_max_idle_per_host(config.workers);
+
+        if let Some(ip) = ip {
+            // Pin the TCP destination while keeping the original URL hostname
+            // intact for HTTP Host and TLS SNI. Proxies are disabled in this
+            // mode because a proxy would resolve the origin on its own side.
+            builder = builder
+                .no_proxy()
+                .resolve(host, SocketAddr::new(ip, 0));
+        }
+
+        let client = builder.build().map_err(|error| {
+            format!("HTTP client error: {}", describe_reqwest_error(&error))
+        })?;
+        routes.push(OriginRoute { client, ip });
+    }
+
+    Ok((routes, resolved_addresses))
+}
+
+fn next_route_index(cursor: &AtomicU64, route_count: usize) -> usize {
+    debug_assert!(route_count > 0);
+    (cursor.fetch_add(1, Ordering::Relaxed) % route_count as u64) as usize
 }
 
 fn validate(config: &TestConfig) -> Result<(), String> {
@@ -354,6 +466,7 @@ async fn perform_request(
     method: Method,
     url: &str,
     body: &str,
+    endpoint_ip: Option<String>,
     run_started: Instant,
     deadline: Instant,
     stop: Arc<AtomicBool>,
@@ -374,6 +487,7 @@ async fn perform_request(
             elapsed_ms: elapsed_us / 1000,
             latency_ms: request_started.elapsed().as_secs_f64() * 1000.0,
             status,
+            endpoint_ip,
             bytes,
             ok,
             error,
@@ -400,22 +514,25 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
     };
 
     runtime.block_on(async move {
-        let client = match Client::builder()
-            .connect_timeout(Duration::from_secs(config.timeout_secs))
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .redirect(reqwest::redirect::Policy::none())
-            .pool_max_idle_per_host(config.workers)
-            .build()
-        {
-            Ok(client) => client,
+        let parsed_url = match Url::parse(&config.url) {
+            Ok(url) => url,
             Err(error) => {
-                let _ = tx.send(EngineEvent::Fatal(format!(
-                    "HTTP client error: {}",
-                    describe_reqwest_error(&error)
-                )));
+                let _ = tx.send(EngineEvent::Fatal(format!("Invalid target URL: {error}")));
                 return;
             }
         };
+        let (origin_routes, resolved_addresses) = match build_origin_routes(&config, &parsed_url) {
+            Ok(routes) => routes,
+            Err(error) => {
+                let _ = tx.send(EngineEvent::Fatal(error));
+                return;
+            }
+        };
+        let _ = tx.send(EngineEvent::OriginsResolved {
+            addresses: resolved_addresses,
+        });
+        let origin_routes = Arc::new(origin_routes);
+        let route_cursor = Arc::new(AtomicU64::new(0));
 
         let method = if config.method == "POST" {
             Method::POST
@@ -445,7 +562,8 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 // Fixed-rate arrivals are scheduled independently of worker
                 // completion. The bounded queue makes overload measurable.
                 for _ in 0..config.workers {
-                    let client = client.clone();
+                    let worker_routes = Arc::clone(&origin_routes);
+                    let worker_route_cursor = Arc::clone(&route_cursor);
                     let worker_tx = tx.clone();
                     let worker_stop = Arc::clone(&stop);
                     let worker_rx = Arc::clone(&job_rx);
@@ -478,11 +596,15 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             worker_counters.started.fetch_add(1, Ordering::Relaxed);
                             emit_stats(&worker_tx, &worker_counters);
 
+                            let route_index =
+                                next_route_index(&worker_route_cursor, worker_routes.len());
+                            let route = worker_routes[route_index].clone();
                             let Some(sample) = perform_request(
-                                &client,
+                                &route.client,
                                 method.clone(),
                                 &url,
                                 &body,
+                                route.ip.map(|ip| ip.to_string()),
                                 started,
                                 deadline,
                                 Arc::clone(&worker_stop),
@@ -586,7 +708,8 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 // the workload; response time naturally feeds back into RPS.
                 let max_total_requests = config.max_total_requests;
                 for _ in 0..config.workers {
-                    let client = client.clone();
+                    let worker_routes = Arc::clone(&origin_routes);
+                    let worker_route_cursor = Arc::clone(&route_cursor);
                     let worker_tx = tx.clone();
                     let worker_stop = Arc::clone(&stop);
                     let worker_counters = Arc::clone(&counters);
@@ -608,11 +731,15 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             worker_counters.started.fetch_add(1, Ordering::Relaxed);
                             emit_stats(&worker_tx, &worker_counters);
 
+                            let route_index =
+                                next_route_index(&worker_route_cursor, worker_routes.len());
+                            let route = worker_routes[route_index].clone();
                             let Some(sample) = perform_request(
-                                &client,
+                                &route.client,
                                 method.clone(),
                                 &url,
                                 &body,
+                                route.ip.map(|ip| ip.to_string()),
                                 started,
                                 deadline,
                                 Arc::clone(&worker_stop),
@@ -668,6 +795,7 @@ mod tests {
             url: url.into(),
             method: "GET".into(),
             load_model: LoadModel::ConstantArrivalRate,
+            dns_strategy: DnsStrategy::System,
             workers: 2,
             duration_secs: 10,
             max_requests_per_second: 5,
@@ -675,6 +803,44 @@ mod tests {
             timeout_secs: 5,
             body: String::new(),
         }
+    }
+
+    #[test]
+    fn dns_strategy_defaults_to_system_and_round_robin_is_named() {
+        assert_eq!(DnsStrategy::default(), DnsStrategy::System);
+        assert_eq!(DnsStrategy::System.label(), "System DNS");
+        assert_eq!(DnsStrategy::RoundRobin.label(), "Round-robin DNS IPs");
+    }
+
+    #[test]
+    fn literal_ip_resolution_returns_the_literal_without_dns() {
+        let url = Url::parse("https://192.0.2.10/").expect("valid IP URL");
+        assert_eq!(
+            resolve_origin_ips(&url).expect("literal IP resolution"),
+            vec!["192.0.2.10".parse::<IpAddr>().expect("literal IP")]
+        );
+    }
+
+    #[test]
+    fn round_robin_route_selection_cycles_through_every_ip() {
+        let cursor = AtomicU64::new(0);
+        let indices: Vec<usize> = (0..7)
+            .map(|_| next_route_index(&cursor, 3))
+            .collect();
+        assert_eq!(indices, vec![0, 1, 2, 0, 1, 2, 0]);
+    }
+
+    #[test]
+    fn round_robin_builds_a_pinned_client_for_literal_ip() {
+        let mut cfg = config("http://127.0.0.1/");
+        cfg.dns_strategy = DnsStrategy::RoundRobin;
+        let url = Url::parse(&cfg.url).expect("target URL");
+        let (routes, addresses) =
+            build_origin_routes(&cfg, &url).expect("build pinned origin client");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].ip, Some("127.0.0.1".parse().expect("loopback IP")));
+        assert_eq!(addresses, vec!["127.0.0.1"]);
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
     }
 
     #[test]
@@ -843,7 +1009,10 @@ mod tests {
                 .recv_timeout(Duration::from_secs(4))
                 .expect("receive closed-loop event")
             {
-                EngineEvent::Started { .. } | EngineEvent::Stats(_) | EngineEvent::Sample(_) => {}
+                EngineEvent::OriginsResolved { .. }
+                | EngineEvent::Started { .. }
+                | EngineEvent::Stats(_)
+                | EngineEvent::Sample(_) => {}
                 EngineEvent::Finished { stats, .. } => break stats,
                 EngineEvent::Fatal(message) => panic!("closed-loop engine failed: {message}"),
             }
@@ -893,7 +1062,7 @@ mod tests {
                 .recv_timeout(Duration::from_secs(4))
                 .expect("receive engine event")
             {
-                EngineEvent::Started { .. } => {}
+                EngineEvent::OriginsResolved { .. } | EngineEvent::Started { .. } => {}
                 EngineEvent::Stats(snapshot) => {
                     max_queued = max_queued.max(snapshot.queued);
                     max_in_flight = max_in_flight.max(snapshot.in_flight);
@@ -966,7 +1135,9 @@ mod tests {
                 .recv_timeout(Duration::from_secs(3))
                 .expect("receive timeout benchmark event")
             {
-                EngineEvent::Started { .. } | EngineEvent::Stats(_) => {}
+                EngineEvent::OriginsResolved { .. }
+                | EngineEvent::Started { .. }
+                | EngineEvent::Stats(_) => {}
                 EngineEvent::Sample(sample) => {
                     handle.stop();
                     break sample;
@@ -983,7 +1154,10 @@ mod tests {
                 .expect("receive finished timeout benchmark event")
             {
                 EngineEvent::Finished { .. } => break,
-                EngineEvent::Started { .. } | EngineEvent::Stats(_) | EngineEvent::Sample(_) => {}
+                EngineEvent::OriginsResolved { .. }
+                | EngineEvent::Started { .. }
+                | EngineEvent::Stats(_)
+                | EngineEvent::Sample(_) => {}
                 EngineEvent::Fatal(message) => panic!("timeout benchmark failed: {message}"),
             }
         }
@@ -1031,6 +1205,7 @@ mod tests {
                 .recv_timeout(Duration::from_secs(3))
                 .expect("receive engine event")
             {
+                EngineEvent::OriginsResolved { .. } => {}
                 EngineEvent::Started { at } => assert!(at <= Instant::now()),
                 EngineEvent::Stats(_) => {}
                 EngineEvent::Sample(sample) => {

@@ -1,24 +1,18 @@
-# RedPulse 0.2.1
+# RedPulse 0.3.0
 
-RedPulse 0.2.1 makes the configurable HTTP traffic engine the primary product direction.
+RedPulse 0.3.0 adds the first Multi-IP testing capability to Traffic Lab.
 
-## Configurable traffic generation
+## DNS origin routing
 
-- Removed fixed application-level ceilings of 64 workers, 200 requests/second, 300 seconds, and 10,000 requests per run.
-- Worker count, duration, arrival rate, timeout, and total request budget are now numeric user-configurable settings.
-- The total request budget defaults to 10,000 as a conservative starting value and can be increased or reduced by the operator.
-- Tokio runtime worker threads automatically match the logical CPU parallelism reported by the operating system.
-- The arrival queue is bounded and sized from the configured worker count.
-- Closed Loop no longer applies a global 200-RPS start pacer; concurrency and response time determine its natural throughput.
-- The old Recon module remains available as a secondary tab, while Traffic Lab is now the startup screen.
+- **System DNS** keeps the normal system resolver and HTTP client behavior.
+- **Round-robin DNS IPs** resolves the target hostname once, collects unique IPv4 and IPv6 addresses, and assigns successive requests across that address list.
+- The request URL remains the original hostname. Reqwest DNS overrides pin the socket destination while the HTTP Host value and HTTPS hostname remain derived from the URL.
+- Pinned mode makes direct origin connections and bypasses system proxy settings, because a proxy would otherwise resolve the hostname remotely.
+- Every completed request records its selected origin IP. The UI shows per-IP request counts, the Results table includes the origin IP, and CSV/JSON reports preserve this attribution.
 
-## Measurement and safeguards
+## Important distinction
 
-- The UI keeps the most recent 10,000 samples and chart points while aggregate counters and latency histogram statistics cover the complete run.
-- Per-request response measurement remains bounded to 2 MiB.
-- POST JSON remains validated and bounded to 256 KiB.
-- Redirect following remains disabled.
-- The configured request budget and duration remain visible in run metadata and exported JSON.
+DNS IP rotation tests the addresses published for the hostname. It does not reveal private backend nodes behind a public load balancer when those nodes are not exposed through DNS. Backend distribution analysis using response headers or application-provided node identifiers remains a separate feature.
 
 ## Validation
 

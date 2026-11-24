@@ -2,6 +2,19 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.3.0] - 2026-11-24
+
+### Added
+- DNS routing selector: normal system DNS or round-robin across resolved A/AAAA addresses.
+- Per-request origin IP attribution in live results and CSV/JSON reports.
+- Pinned-origin HTTP clients that connect to a selected IP while keeping the original URL hostname for HTTP Host and TLS SNI.
+- Per-IP request distribution counters in Traffic Lab.
+- Tests for DNS strategy defaults, literal IP resolution, round-robin selection, and pinned client construction.
+
+### Changed
+- Traffic Lab now exposes DNS origin routing alongside the existing load model and worker controls.
+- DNS-pinned mode bypasses configured system proxies so the client connects directly to the selected address.
+
 ## [0.2.1] - 2026-11-24
 
 ### Changed

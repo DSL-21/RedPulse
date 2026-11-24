@@ -25,6 +25,10 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 - Request accounting: scheduled, started, completed, queued, in-flight, cancelled and dropped.
 - JSON and CSV export of retained samples.
 - Immediate cancellation and redirect following disabled.
+- System DNS mode or round-robin routing across DNS-resolved IPv4/IPv6 addresses.
+- Direct pinned-IP connections that preserve the original URL hostname for HTTP Host and TLS SNI.
+- Per-request origin IP attribution and live per-IP request distribution.
+- Origin IP included in sample tables and CSV/JSON reports.
 - Optional Web Recon tab retained from the earlier prototype.
 
 The current release concentrates on the configurable HTTP traffic engine. Dedicated multi-origin and load-balancer distribution/failover analysis is the next development milestone; the existing Recon tab is not the main product direction.
@@ -51,6 +55,16 @@ The rate interval uses nanosecond duration granularity. Values beyond the clock'
 ### Closed Loop
 
 Each worker starts its next request after its previous request completes. There is no arrival timer and no global 200-RPS start pacer. Throughput emerges from configured concurrency and observed response time: slower responses naturally reduce request starts.
+
+### DNS origin routing
+
+**System DNS** uses the normal system resolver and shared client behavior.
+
+**Round-robin DNS IPs** resolves the hostname at the start of the run, collects unique IPv4 and IPv6 addresses, and creates a pinned client for each address. Successive request starts are assigned cyclically to those clients. The URL itself is not rewritten, so the hostname remains the source for HTTP Host and HTTPS TLS SNI. Pinned mode bypasses configured system proxy settings so the selected IP is reached directly.
+
+The live Traffic Lab view counts requests per origin IP. Each retained sample records its selected IP, and the IP is included in result tables and report exports. If the DNS name returns only one address, this mode naturally uses that one address.
+
+This feature tests the IP addresses published for a hostname. A public load balancer often hides private backend addresses; DNS rotation therefore does not prove how the balancer distributes traffic among those hidden backends. Backend distribution analysis requires an application-provided backend identifier or response header and is a separate upcoming feature.
 
 ### Configurable run budget
 
@@ -98,13 +112,13 @@ target/x86_64-pc-windows-msvc/release/redpulse.exe
 ## Reports
 
 - **JSON** contains application metadata, target, method, configured worker count, traffic model, configured request budget, generation timestamp, final counters, and retained samples.
-- **CSV** contains one row per retained request sample.
+- **CSV** contains one row per retained request sample, including the selected origin IP when DNS pinning is enabled.
 
 Reports are written to the application's current working directory using `redpulse-report.json` and `redpulse-report.csv`.
 
 ## Project status
 
-RedPulse 0.2.1 removes the old fixed worker, RPS, duration, and global Closed Loop pacing ceilings. The default profile remains conservative, while operators can choose their own run settings. This version is the foundation for the next stages: multi-origin testing, load-balancer distribution and failover analysis, hardware telemetry, traffic profiles, and controlled benchmark comparisons.
+RedPulse 0.3.0 adds DNS-based multi-IP origin routing and per-request IP attribution on top of the configurable traffic engine. The next stages are backend distribution analysis, failover testing, hardware telemetry, traffic profiles, and controlled benchmark comparisons.
 
 Use the tool only against systems you own or are explicitly authorized to test. Set a request budget and duration appropriate for the environment before starting a run.
 

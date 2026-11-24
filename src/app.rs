@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -10,8 +10,8 @@ use hdrhistogram::Histogram;
 
 use crate::{
     engine::{
-        self, DEFAULT_MAX_TOTAL_REQUESTS, EngineEvent, EngineStats, LoadModel,
-        MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
+        self, DEFAULT_MAX_TOTAL_REQUESTS, DnsStrategy, EngineEvent, EngineStats,
+        LoadModel, MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
     },
     recon::ReconState,
     report,
@@ -107,6 +107,8 @@ struct RunSnapshot {
     duration_secs: u64,
     request_rate: Option<u64>,
     max_total_requests: u64,
+    dns_strategy: DnsStrategy,
+    resolved_addresses: Vec<String>,
     timeout_secs: u64,
     actual_elapsed_secs: f64,
 }
@@ -117,6 +119,7 @@ pub struct RedPulseApp {
     target: String,
     method: String,
     load_model: LoadModel,
+    dns_strategy: DnsStrategy,
     workers: usize,
     duration: u64,
     rps: u64,
@@ -126,6 +129,8 @@ pub struct RedPulseApp {
     running: Option<TestHandle>,
     samples: VecDeque<Sample>,
     recent_latencies: VecDeque<(f64, f64)>,
+    resolved_addresses: Vec<String>,
+    origin_request_counts: BTreeMap<String, u64>,
     started: Option<Instant>,
     elapsed_seconds: f64,
     status: String,
@@ -176,6 +181,7 @@ impl RedPulseApp {
             target: "https://example.com/".into(),
             method: "GET".into(),
             load_model: LoadModel::ConstantArrivalRate,
+            dns_strategy: DnsStrategy::System,
             workers: 5,
             duration: 30,
             rps: 5,
@@ -185,6 +191,8 @@ impl RedPulseApp {
             running: None,
             samples: VecDeque::new(),
             recent_latencies: VecDeque::new(),
+            resolved_addresses: Vec::new(),
+            origin_request_counts: BTreeMap::new(),
             started: None,
             elapsed_seconds: 0.0,
             status: "Ready".into(),
@@ -209,6 +217,8 @@ impl RedPulseApp {
     fn reset_results(&mut self) {
         self.samples.clear();
         self.recent_latencies.clear();
+        self.resolved_addresses.clear();
+        self.origin_request_counts.clear();
         self.total_received = 0;
         self.total_success = 0;
         self.total_redirects = 0;
@@ -234,6 +244,7 @@ impl RedPulseApp {
             url: self.target.trim().to_string(),
             method: self.method.clone(),
             load_model: self.load_model,
+            dns_strategy: self.dns_strategy,
             workers: self.workers,
             duration_secs: self.duration,
             max_requests_per_second: self.rps,
@@ -250,6 +261,8 @@ impl RedPulseApp {
             request_rate: (config.load_model == LoadModel::ConstantArrivalRate)
                 .then_some(config.max_requests_per_second),
             max_total_requests: config.max_total_requests,
+            dns_strategy: config.dns_strategy,
+            resolved_addresses: Vec::new(),
             load_model: config.load_model,
             timeout_secs: config.timeout_secs,
             actual_elapsed_secs: 0.0,
@@ -275,6 +288,9 @@ impl RedPulseApp {
 
     fn record_sample(&mut self, sample: Sample) {
         self.total_received += 1;
+        if let Some(ip) = sample.endpoint_ip.as_ref() {
+            *self.origin_request_counts.entry(ip.clone()).or_default() += 1;
+        }
         match classify_status(sample.status) {
             ResponseClass::Success => self.total_success += 1,
             ResponseClass::Redirect => self.total_redirects += 1,
@@ -327,6 +343,12 @@ impl RedPulseApp {
         let mut finished = false;
         for event in events {
             match event {
+                EngineEvent::OriginsResolved { addresses } => {
+                    self.resolved_addresses = addresses.clone();
+                    if let Some(run) = self.last_run.as_mut() {
+                        run.resolved_addresses = addresses;
+                    }
+                }
                 EngineEvent::Started { at } => {
                     self.started = Some(at);
                     self.status = "Running".into();
@@ -418,6 +440,8 @@ impl RedPulseApp {
                 timeout_secs: run.timeout_secs,
                 actual_elapsed_secs: run.actual_elapsed_secs,
                 max_total_requests: run.max_total_requests,
+                dns_strategy: run.dns_strategy,
+                resolved_addresses: &run.resolved_addresses,
                 stats: self.engine_stats,
             };
             report::export_json(&path, &config, &all_samples)
@@ -559,6 +583,39 @@ impl RedPulseApp {
                     .color(egui::Color32::from_rgb(137, 157, 181)),
             );
         });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("DNS routing");
+            egui::ComboBox::from_id_salt("dns_strategy")
+                .selected_text(self.dns_strategy.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.dns_strategy,
+                        DnsStrategy::System,
+                        DnsStrategy::System.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.dns_strategy,
+                        DnsStrategy::RoundRobin,
+                        DnsStrategy::RoundRobin.label(),
+                    );
+                });
+        });
+        ui.label(
+            egui::RichText::new(self.dns_strategy.description())
+                .small()
+                .color(egui::Color32::from_rgb(137, 157, 181)),
+        );
+        if self.dns_strategy == DnsStrategy::RoundRobin {
+            ui.label(
+                egui::RichText::new(
+                    "Pinned mode opens direct connections to resolved IPs and keeps the URL hostname for HTTP Host and TLS SNI. System proxy settings are bypassed.",
+                )
+                .small()
+                .color(egui::Color32::from_rgb(137, 157, 181)),
+            );
+        }
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -749,6 +806,18 @@ impl RedPulseApp {
             .small()
             .color(egui::Color32::from_rgb(156, 177, 201)),
         );
+        if self.dns_strategy == DnsStrategy::RoundRobin {
+            ui.add_space(8.0);
+            ui.heading("DNS origin distribution");
+            if self.resolved_addresses.is_empty() {
+                ui.label("Resolving target addresses…");
+            } else {
+                for address in &self.resolved_addresses {
+                    let requests = self.origin_request_counts.get(address).copied().unwrap_or(0);
+                    ui.label(format!("{address}  ·  {requests} requests"));
+                }
+            }
+        }
         if self.engine_stats.limit_reached {
             ui.colored_label(
                 egui::Color32::from_rgb(238, 178, 82),
@@ -855,9 +924,10 @@ impl RedPulseApp {
                         .map(|rate| format!("{rate} req/s arrival target"))
                         .unwrap_or_else(|| "throughput determined by workers".into());
                     ui.label(format!(
-                        "{} · {} · {} workers · {} s configured · {} · {} request budget · {} s timeout · {:.3} s measured",
+                        "{} · {} · {} · {} workers · {} s configured · {} · {} request budget · {} s timeout · {:.3} s measured",
                         run.method,
                         run.load_model.label(),
+                        run.dns_strategy.label(),
                         run.workers,
                         run.duration_secs,
                         rate_description,
@@ -865,6 +935,9 @@ impl RedPulseApp {
                         run.timeout_secs,
                         run.actual_elapsed_secs
                     ));
+                    if !run.resolved_addresses.is_empty() {
+                        ui.label(format!("Pinned DNS addresses: {}", run.resolved_addresses.join(", ")));
+                    }
                 });
         }
         ui.horizontal(|ui| {
@@ -915,7 +988,7 @@ impl RedPulseApp {
             egui::Grid::new("sample_table")
                 .striped(true)
                 .show(ui, |ui| {
-                    for heading in ["Elapsed", "Status", "Latency", "Bytes", "Result"] {
+                    for heading in ["Elapsed", "Status", "Latency", "Origin IP", "Bytes", "Result"] {
                         ui.strong(heading);
                     }
                     ui.end_row();
@@ -940,6 +1013,7 @@ impl RedPulseApp {
                             },
                         );
                         ui.label(format!("{:.1} ms", sample.latency_ms));
+                        ui.label(sample.endpoint_ip.as_deref().unwrap_or("System DNS"));
                         ui.label(sample.bytes.to_string());
                         let details = sample.error.as_deref().unwrap_or(if sample.ok {
                             "HTTP response received"
@@ -970,6 +1044,7 @@ impl RedPulseApp {
         ui.label("Interface: egui / eframe");
         ui.label("Recon: bounded HTTP surface inspection, header and cookie posture checks");
         ui.label("Load testing: Constant Arrival Rate and Closed Loop");
+        ui.label("DNS routing: system resolver or round-robin across resolved IP addresses");
         ui.label("Metrics: response status, throughput and latency percentiles");
         ui.label("Reports: JSON and CSV for benchmark runs");
         ui.label("Recon profile: six sequential HTTP probes, no redirects, five-second timeout");
