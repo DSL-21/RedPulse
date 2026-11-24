@@ -108,6 +108,7 @@ struct RunSnapshot {
     request_rate: Option<u64>,
     max_total_requests: u64,
     dns_strategy: DnsStrategy,
+    backend_id_header: String,
     resolved_addresses: Vec<String>,
     timeout_secs: u64,
     actual_elapsed_secs: f64,
@@ -120,6 +121,7 @@ pub struct RedPulseApp {
     method: String,
     load_model: LoadModel,
     dns_strategy: DnsStrategy,
+    backend_id_header: String,
     workers: usize,
     duration: u64,
     rps: u64,
@@ -131,6 +133,7 @@ pub struct RedPulseApp {
     recent_latencies: VecDeque<(f64, f64)>,
     resolved_addresses: Vec<String>,
     origin_request_counts: BTreeMap<String, u64>,
+    backend_request_counts: BTreeMap<String, u64>,
     started: Option<Instant>,
     elapsed_seconds: f64,
     status: String,
@@ -182,6 +185,7 @@ impl RedPulseApp {
             method: "GET".into(),
             load_model: LoadModel::ConstantArrivalRate,
             dns_strategy: DnsStrategy::System,
+            backend_id_header: "x-backend-id".into(),
             workers: 5,
             duration: 30,
             rps: 5,
@@ -193,6 +197,7 @@ impl RedPulseApp {
             recent_latencies: VecDeque::new(),
             resolved_addresses: Vec::new(),
             origin_request_counts: BTreeMap::new(),
+            backend_request_counts: BTreeMap::new(),
             started: None,
             elapsed_seconds: 0.0,
             status: "Ready".into(),
@@ -219,6 +224,7 @@ impl RedPulseApp {
         self.recent_latencies.clear();
         self.resolved_addresses.clear();
         self.origin_request_counts.clear();
+        self.backend_request_counts.clear();
         self.total_received = 0;
         self.total_success = 0;
         self.total_redirects = 0;
@@ -251,6 +257,7 @@ impl RedPulseApp {
             max_total_requests: self.max_requests,
             timeout_secs: self.timeout,
             body: self.body.clone(),
+            backend_id_header: self.backend_id_header.trim().to_string(),
         };
 
         let snapshot = RunSnapshot {
@@ -262,6 +269,7 @@ impl RedPulseApp {
                 .then_some(config.max_requests_per_second),
             max_total_requests: config.max_total_requests,
             dns_strategy: config.dns_strategy,
+            backend_id_header: config.backend_id_header.clone(),
             resolved_addresses: Vec::new(),
             load_model: config.load_model,
             timeout_secs: config.timeout_secs,
@@ -290,6 +298,9 @@ impl RedPulseApp {
         self.total_received += 1;
         if let Some(ip) = sample.endpoint_ip.as_ref() {
             *self.origin_request_counts.entry(ip.clone()).or_default() += 1;
+        }
+        if let Some(backend_id) = sample.backend_id.as_ref() {
+            *self.backend_request_counts.entry(backend_id.clone()).or_default() += 1;
         }
         match classify_status(sample.status) {
             ResponseClass::Success => self.total_success += 1,
@@ -441,6 +452,7 @@ impl RedPulseApp {
                 actual_elapsed_secs: run.actual_elapsed_secs,
                 max_total_requests: run.max_total_requests,
                 dns_strategy: run.dns_strategy,
+                backend_id_header: &run.backend_id_header,
                 resolved_addresses: &run.resolved_addresses,
                 stats: self.engine_stats,
             };
@@ -602,6 +614,12 @@ impl RedPulseApp {
                     );
                 });
         });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Backend identity header");
+            ui.add_enabled(self.running.is_none(), egui::TextEdit::singleline(&mut self.backend_id_header).hint_text("x-backend-id").desired_width(220.0));
+        });
+        ui.label(egui::RichText::new("Optional response header used to identify the actual application backend (for example X-Backend-ID). Leave blank to disable backend attribution.").small().color(egui::Color32::from_rgb(137, 157, 181)));
         ui.label(
             egui::RichText::new(self.dns_strategy.description())
                 .small()
@@ -822,6 +840,16 @@ impl RedPulseApp {
                 }
             }
         }
+        if !self.backend_request_counts.is_empty() {
+            ui.add_space(8.0);
+            ui.heading("Backend distribution");
+            let total: u64 = self.backend_request_counts.values().sum();
+            for (backend, requests) in &self.backend_request_counts {
+                let share = if total == 0 { 0.0 } else { *requests as f64 * 100.0 / total as f64 };
+                ui.label(format!("{backend}  ·  {requests} requests  ·  {share:.1}%"));
+            }
+            ui.label(egui::RichText::new(format!("Identified {total} of {} completed responses. Responses without the configured header are not attributed to a backend.", self.total_received)).small().color(egui::Color32::from_rgb(137, 157, 181)));
+        }
         if self.engine_stats.limit_reached {
             ui.colored_label(
                 egui::Color32::from_rgb(238, 178, 82),
@@ -928,7 +956,7 @@ impl RedPulseApp {
                         .map(|rate| format!("{rate} req/s arrival target"))
                         .unwrap_or_else(|| "throughput determined by workers".into());
                     ui.label(format!(
-                        "{} · {} · {} · {} workers · {} s configured · {} · {} request budget · {} s timeout · {:.3} s measured",
+                        "{} · {} · {} · {} workers · {} s configured · {} · {} request budget · {} s timeout · {:.3} s measured · backend header {}",
                         run.method,
                         run.load_model.label(),
                         run.dns_strategy.label(),
@@ -937,7 +965,8 @@ impl RedPulseApp {
                         rate_description,
                         run.max_total_requests,
                         run.timeout_secs,
-                        run.actual_elapsed_secs
+                        run.actual_elapsed_secs,
+                        if run.backend_id_header.is_empty() { "disabled" } else { &run.backend_id_header }
                     ));
                     if !run.resolved_addresses.is_empty() {
                         ui.label(format!("Pinned DNS addresses: {}", run.resolved_addresses.join(", ")));
@@ -968,6 +997,14 @@ impl RedPulseApp {
             self.total_http_5xx,
             self.total_network_errors
         ));
+        if !self.backend_request_counts.is_empty() {
+            ui.heading("Backend distribution");
+            let total: u64 = self.backend_request_counts.values().sum();
+            for (backend, requests) in &self.backend_request_counts {
+                let share = if total == 0 { 0.0 } else { *requests as f64 * 100.0 / total as f64 };
+                ui.label(format!("{backend}: {requests} requests ({share:.1}%)"));
+            }
+        }
         ui.label(format!(
             "Scheduled {} · Started {} · Completed {} · Queued {} · In-flight {} · Cancelled {} · Dropped {}",
             self.engine_stats.scheduled,
