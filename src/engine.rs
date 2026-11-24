@@ -315,8 +315,7 @@ fn validate(config: &TestConfig) -> Result<(), String> {
         return Err("Supported methods are GET and POST.".into());
     }
     if !config.backend_id_header.trim().is_empty()
-        && reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes())
-            .is_err()
+        && reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes()).is_err()
     {
         return Err("Backend identity header name is invalid.".into());
     }
@@ -381,9 +380,19 @@ fn describe_reqwest_error(error: &reqwest::Error) -> String {
     }
 }
 
-fn extract_backend_id(headers: &reqwest::header::HeaderMap, header_name: &str) -> Option<String> {
-    let header_name =
-        reqwest::header::HeaderName::from_bytes(header_name.trim().as_bytes()).ok()?;
+#[derive(Clone)]
+struct RequestSpec {
+    method: Method,
+    url: String,
+    body: String,
+    backend_id_header: Option<reqwest::header::HeaderName>,
+}
+
+fn extract_backend_id(
+    headers: &reqwest::header::HeaderMap,
+    header_name: Option<&reqwest::header::HeaderName>,
+) -> Option<String> {
+    let header_name = header_name?;
     headers
         .get(header_name)
         .and_then(|value| value.to_str().ok())
@@ -392,28 +401,21 @@ fn extract_backend_id(headers: &reqwest::header::HeaderMap, header_name: &str) -
         .map(str::to_owned)
 }
 
-struct RequestSpec<'a> {
-    method: &'a Method,
-    url: &'a str,
-    body: &'a str,
-    backend_id_header: &'a str,
-}
-
 async fn execute_request(
     client: &Client,
-    request_spec: &RequestSpec<'_>,
+    spec: &RequestSpec,
 ) -> (u16, usize, bool, Option<String>, Option<String>) {
-    let mut request = client.request(request_spec.method.clone(), request_spec.url);
-    if request_spec.method == Method::POST {
+    let mut request = client.request(spec.method.clone(), &spec.url);
+    if spec.method == Method::POST {
         request = request
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(request_spec.body.to_string());
+            .body(spec.body.clone());
     }
 
     match request.send().await {
         Ok(mut response) => {
             let status = response.status().as_u16();
-            let backend_id = extract_backend_id(response.headers(), request_spec.backend_id_header);
+            let backend_id = extract_backend_id(response.headers(), spec.backend_id_header.as_ref());
             let mut count = 0usize;
             let mut read_error = None;
 
@@ -436,13 +438,7 @@ async fn execute_request(
             }
 
             let ok = (200..300).contains(&status) && read_error.is_none();
-            (
-                status,
-                count.min(MAX_RESPONSE_BYTES),
-                ok,
-                read_error,
-                backend_id,
-            )
+            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error, backend_id)
         }
         Err(error) => (0, 0, false, Some(describe_reqwest_error(&error)), None),
     }
@@ -498,7 +494,7 @@ struct RunTiming {
 
 async fn perform_request(
     client: &Client,
-    request_spec: &RequestSpec<'_>,
+    spec: &RequestSpec,
     endpoint_ip: Option<String>,
     timing: RunTiming,
     stop: Arc<AtomicBool>,
@@ -509,7 +505,7 @@ async fn perform_request(
     let result = tokio::select! {
         _ = wait_for_stop(Arc::clone(&stop)) => None,
         _ = tokio::time::sleep_until(tokio_deadline) => None,
-        response = execute_request(client, request_spec) => Some(response),
+        response = execute_request(client, spec) => Some(response),
     };
 
     result.map(|(status, bytes, ok, error, backend_id)| {
@@ -572,6 +568,16 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         } else {
             Method::GET
         };
+        let request_spec = RequestSpec {
+            method,
+            url: config.url.clone(),
+            body: config.body.clone(),
+            backend_id_header: if config.backend_id_header.trim().is_empty() {
+                None
+            } else {
+                reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes()).ok()
+            },
+        };
         let started = Instant::now();
         let Some(deadline) = started.checked_add(Duration::from_secs(config.duration_secs)) else {
             let _ = tx.send(EngineEvent::Fatal(
@@ -601,18 +607,9 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     let worker_stop = Arc::clone(&stop);
                     let worker_rx = Arc::clone(&job_rx);
                     let worker_counters = Arc::clone(&counters);
-                    let url = config.url.clone();
-                    let body = config.body.clone();
-                    let backend_id_header = config.backend_id_header.clone();
-                    let method = method.clone();
+                    let worker_request = request_spec.clone();
 
                     tasks.spawn(async move {
-                        let request_spec = RequestSpec {
-                            method: &method,
-                            url: &url,
-                            body: &body,
-                            backend_id_header: &backend_id_header,
-                        };
                         loop {
                             let next_job = async {
                                 let mut receiver = worker_rx.lock().await;
@@ -641,7 +638,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             let route = worker_routes[route_index].clone();
                             let Some(sample) = perform_request(
                                 &route.client,
-                                &request_spec,
+                                &worker_request,
                                 route.ip.map(|ip| ip.to_string()),
                                 RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
@@ -750,18 +747,9 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     let worker_tx = tx.clone();
                     let worker_stop = Arc::clone(&stop);
                     let worker_counters = Arc::clone(&counters);
-                    let url = config.url.clone();
-                    let body = config.body.clone();
-                    let backend_id_header = config.backend_id_header.clone();
-                    let method = method.clone();
+                    let worker_request = request_spec.clone();
 
                     tasks.spawn(async move {
-                        let request_spec = RequestSpec {
-                            method: &method,
-                            url: &url,
-                            body: &body,
-                            backend_id_header: &backend_id_header,
-                        };
                         loop {
                             if worker_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
                                 break;
@@ -780,7 +768,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             let route = worker_routes[route_index].clone();
                             let Some(sample) = perform_request(
                                 &route.client,
-                                &request_spec,
+                                &worker_request,
                                 route.ip.map(|ip| ip.to_string()),
                                 RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
@@ -850,15 +838,10 @@ mod tests {
     #[test]
     fn backend_identity_header_is_case_insensitive_and_trimmed() {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "x-backend-id",
-            reqwest::header::HeaderValue::from_static("  node-a  "),
-        );
-        assert_eq!(
-            extract_backend_id(&headers, "X-Backend-ID"),
-            Some("node-a".into())
-        );
-        assert_eq!(extract_backend_id(&headers, ""), None);
+        headers.insert("x-backend-id", reqwest::header::HeaderValue::from_static("  node-a  "));
+        let name = reqwest::header::HeaderName::from_static("x-backend-id");
+        assert_eq!(extract_backend_id(&headers, Some(&name)), Some("node-a".into()));
+        assert_eq!(extract_backend_id(&headers, None), None);
     }
 
     #[test]
