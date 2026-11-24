@@ -20,8 +20,9 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 - HTTP GET and POST requests
 - Configurable worker count, run duration, global request-rate ceiling and timeout
 - One shared request scheduler across all workers
-- Live request count, observed RPS and response-time chart
-- Average, P50, P95 and P99 response latency
+- Live request count, observed RPS and response-time chart with Reset View
+- Min, average, P50, P95, P99 and max HTTP response latency
+- P50 and P95 reference lines on the response-time chart
 - HTTP status classes and network error counts
 - Per-request result table
 - JSON and CSV report export
@@ -46,9 +47,9 @@ The initial defaults are 5 workers, 30 seconds, 5 requests per second and a 10-s
 
 RedPulse starts a Tokio runtime on a dedicated engine thread. A configured number of asynchronous workers share one scheduler. Each worker reserves a time slot from that shared scheduler, so the configured request-rate ceiling is global rather than multiplied by the number of workers.
 
-Worker count controls how many requests may be in flight concurrently. The request-rate setting controls the maximum pace at which new requests are scheduled. Actual observed throughput can be lower than the configured ceiling when the server, network, or client cannot complete requests quickly enough.
+Worker count controls how many requests may be in flight concurrently. The request-rate setting controls the maximum pace at which new requests are scheduled. Actual observed throughput can be lower than the configured ceiling when the server, network, or client cannot complete requests quickly enough. The engine reports its own monotonic start instant and measured elapsed duration; the final observed RPS uses that measured duration rather than the GUI refresh interval.
 
-For each request, RedPulse records elapsed time, response latency, status code, measured response size, and any transport or body-read error. Redirects are not followed, so a 3xx response is measured directly rather than silently sending another request.
+For each request, RedPulse records elapsed time, response latency, status code, measured response size, and any transport or body-read error. HTTP response latency statistics include HTTP responses (including 4xx and 5xx) and exclude transport failures such as DNS, connection and timeout errors; those failures are counted separately. Redirects are not followed, so a 3xx response is measured directly rather than silently sending another request. The chart plots the most recent HTTP response samples against elapsed time, includes P50/P95 reference lines, and can be restored with Reset View or a double-click.
 
 ## Initial release limits
 
@@ -101,7 +102,7 @@ Reports are written to the application's current working directory using the nam
 
 ## Project status
 
-RedPulse 0.1.1 is the second public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, even after the sliders are changed for a future test. JSON reports include this exact run profile. Network failures show a more detailed error chain to distinguish timeouts, connection failures and lower-level causes. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are not part of this initial version.
+RedPulse 0.1.2 is the third public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and a Reset View control. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are not part of this initial version.
 
 ## License
 
