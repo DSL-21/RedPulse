@@ -112,6 +112,21 @@ pub struct Sample {
     pub timestamp: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HardwareSample {
+    pub elapsed_ms: u64,
+    pub logical_cores: usize,
+    pub system_cpu_percent: f32,
+    /// Process CPU can exceed 100% when the process uses multiple logical cores.
+    pub process_cpu_percent: f32,
+    pub system_memory_used_bytes: u64,
+    pub system_memory_total_bytes: u64,
+    pub process_memory_bytes: Option<u64>,
+    /// Host-wide interface throughput, not traffic attributed only to RedPulse.
+    pub network_rx_bytes_per_sec: u64,
+    pub network_tx_bytes_per_sec: u64,
+}
+
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
     OriginsResolved {
@@ -122,6 +137,7 @@ pub enum EngineEvent {
     },
     Stats(EngineStats),
     Sample(Sample),
+    Hardware(HardwareSample),
     Finished {
         stopped: bool,
         elapsed_secs: f64,
@@ -525,6 +541,96 @@ async fn perform_request(
     })
 }
 
+fn spawn_hardware_monitor(
+    started: Instant,
+    deadline: Instant,
+    stop: Arc<AtomicBool>,
+    tx: Sender<EngineEvent>,
+) -> Option<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("redpulse-hardware-monitor".into())
+        .spawn(move || {
+            use sysinfo::{
+                Networks, ProcessRefreshKind, ProcessesToUpdate, System,
+            };
+
+            let Ok(pid) = sysinfo::get_current_pid() else {
+                return;
+            };
+            let Ok(mut system) = System::new() else {
+                return;
+            };
+            let Ok(mut networks) = Networks::new_with_refreshed_list() else {
+                return;
+            };
+
+            // Prime the counters; CPU usage is calculated from the interval
+            // between refreshes and is meaningful after the next sample.
+            system.refresh_cpu_usage();
+            system.refresh_memory();
+            let process_ids = [pid];
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&process_ids),
+                true,
+                ProcessRefreshKind::nothing().with_cpu().with_memory(),
+            );
+
+            let logical_cores = system.cpus().len().max(1);
+            let mut previous_tick = Instant::now();
+
+            while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+                thread::sleep(Duration::from_secs(1));
+
+                if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                    break;
+                }
+
+                system.refresh_cpu_usage();
+                system.refresh_memory();
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&process_ids),
+                    true,
+                    ProcessRefreshKind::nothing().with_cpu().with_memory(),
+                );
+                networks.refresh(true);
+
+                let now = Instant::now();
+                let interval_secs = now.duration_since(previous_tick).as_secs_f64().max(0.001);
+                let received_bytes = networks
+                    .iter()
+                    .map(|(_, network)| network.received())
+                    .sum::<u64>();
+                let transmitted_bytes = networks
+                    .iter()
+                    .map(|(_, network)| network.transmitted())
+                    .sum::<u64>();
+                let process = system.process(pid);
+
+                let sample = HardwareSample {
+                    elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                    logical_cores,
+                    system_cpu_percent: system.global_cpu_usage(),
+                    process_cpu_percent: process.map(|process| process.cpu_usage()).unwrap_or(0.0),
+                    system_memory_used_bytes: system.used_memory(),
+                    system_memory_total_bytes: system.total_memory(),
+                    process_memory_bytes: process.map(|process| process.memory()),
+                    network_rx_bytes_per_sec: (received_bytes as f64 / interval_secs)
+                        .round()
+                        .min(u64::MAX as f64) as u64,
+                    network_tx_bytes_per_sec: (transmitted_bytes as f64 / interval_secs)
+                        .round()
+                        .min(u64::MAX as f64) as u64,
+                };
+
+                if tx.send(EngineEvent::Hardware(sample)).is_err() {
+                    break;
+                }
+                previous_tick = now;
+            }
+        })
+        .ok()
+}
+
 fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>) {
     let runtime = match Builder::new_multi_thread()
         .worker_threads(
@@ -586,6 +692,12 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
             return;
         };
         let _ = tx.send(EngineEvent::Started { at: started });
+        let hardware_monitor = spawn_hardware_monitor(
+            started,
+            deadline,
+            Arc::clone(&stop),
+            tx.clone(),
+        );
 
         let counters = Arc::new(Counters::default());
         let mut tasks = tokio::task::JoinSet::new();
@@ -797,6 +909,9 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
             if let Err(error) = result {
                 let _ = tx.send(EngineEvent::Fatal(format!("Worker task failed: {error}")));
             }
+        }
+        if let Some(monitor) = hardware_monitor {
+            let _ = monitor.join();
         }
 
         let stats = counters.final_snapshot();
