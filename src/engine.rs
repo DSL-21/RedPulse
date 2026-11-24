@@ -459,18 +459,23 @@ fn request_interval(requests_per_second: u64) -> Duration {
     Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
 }
 
+#[derive(Clone, Copy)]
+struct RunTiming {
+    started: Instant,
+    deadline: Instant,
+}
+
 async fn perform_request(
     client: &Client,
     method: Method,
     url: &str,
     body: &str,
     endpoint_ip: Option<String>,
-    run_started: Instant,
-    deadline: Instant,
+    timing: RunTiming,
     stop: Arc<AtomicBool>,
 ) -> Option<Sample> {
     let request_started = Instant::now();
-    let tokio_deadline = tokio::time::Instant::from_std(deadline);
+    let tokio_deadline = tokio::time::Instant::from_std(timing.deadline);
 
     let result = tokio::select! {
         _ = wait_for_stop(Arc::clone(&stop)) => None,
@@ -479,7 +484,7 @@ async fn perform_request(
     };
 
     result.map(|(status, bytes, ok, error)| {
-        let elapsed_us = run_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        let elapsed_us = timing.started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         Sample {
             elapsed_us,
             elapsed_ms: elapsed_us / 1000,
@@ -603,8 +608,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 &url,
                                 &body,
                                 route.ip.map(|ip| ip.to_string()),
-                                started,
-                                deadline,
+                                RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
                             )
                             .await
@@ -738,8 +742,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 &url,
                                 &body,
                                 route.ip.map(|ip| ip.to_string()),
-                                started,
-                                deadline,
+                                RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
                             )
                             .await
