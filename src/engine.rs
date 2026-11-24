@@ -389,24 +389,29 @@ fn extract_backend_id(headers: &reqwest::header::HeaderMap, header_name: &str) -
         .map(str::to_owned)
 }
 
+struct RequestSpec<'a> {
+    method: &'a Method,
+    url: &'a str,
+    body: &'a str,
+    backend_id_header: &'a str,
+}
+
 async fn execute_request(
     client: &Client,
-    method: Method,
-    url: &str,
-    body: &str,
-    backend_id_header: &str,
+    request_spec: &RequestSpec<'_>,
 ) -> (u16, usize, bool, Option<String>, Option<String>) {
-    let mut request = client.request(method.clone(), url);
-    if method == Method::POST {
+    let mut request = client.request(request_spec.method.clone(), request_spec.url);
+    if request_spec.method == Method::POST {
         request = request
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body.to_string());
+            .body(request_spec.body.to_string());
     }
 
     match request.send().await {
         Ok(mut response) => {
             let status = response.status().as_u16();
-            let backend_id = extract_backend_id(response.headers(), backend_id_header);
+            let backend_id =
+                extract_backend_id(response.headers(), request_spec.backend_id_header);
             let mut count = 0usize;
             let mut read_error = None;
 
@@ -485,10 +490,7 @@ struct RunTiming {
 
 async fn perform_request(
     client: &Client,
-    method: Method,
-    url: &str,
-    body: &str,
-    backend_id_header: &str,
+    request_spec: &RequestSpec<'_>,
     endpoint_ip: Option<String>,
     timing: RunTiming,
     stop: Arc<AtomicBool>,
@@ -499,7 +501,7 @@ async fn perform_request(
     let result = tokio::select! {
         _ = wait_for_stop(Arc::clone(&stop)) => None,
         _ = tokio::time::sleep_until(tokio_deadline) => None,
-        response = execute_request(client, method, url, body, backend_id_header) => Some(response),
+        response = execute_request(client, request_spec) => Some(response),
     };
 
     result.map(|(status, bytes, ok, error, backend_id)| {
@@ -597,6 +599,12 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     let method = method.clone();
 
                     tasks.spawn(async move {
+                        let request_spec = RequestSpec {
+                            method: &method,
+                            url: &url,
+                            body: &body,
+                            backend_id_header: &backend_id_header,
+                        };
                         loop {
                             let next_job = async {
                                 let mut receiver = worker_rx.lock().await;
@@ -625,10 +633,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             let route = worker_routes[route_index].clone();
                             let Some(sample) = perform_request(
                                 &route.client,
-                                method.clone(),
-                                &url,
-                                &body,
-                                &backend_id_header,
+                                &request_spec,
                                 route.ip.map(|ip| ip.to_string()),
                                 RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
@@ -743,6 +748,12 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     let method = method.clone();
 
                     tasks.spawn(async move {
+                        let request_spec = RequestSpec {
+                            method: &method,
+                            url: &url,
+                            body: &body,
+                            backend_id_header: &backend_id_header,
+                        };
                         loop {
                             if worker_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
                                 break;
@@ -761,10 +772,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             let route = worker_routes[route_index].clone();
                             let Some(sample) = perform_request(
                                 &route.client,
-                                method.clone(),
-                                &url,
-                                &body,
-                                &backend_id_header,
+                                &request_spec,
                                 route.ip.map(|ip| ip.to_string()),
                                 RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
