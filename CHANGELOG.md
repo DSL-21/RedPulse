@@ -2,6 +2,19 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.2.1] - 2026-11-24
+
+### Changed
+- Repositioned the primary workflow as Traffic Lab and HTTP performance testing.
+- Removed the fixed 64-worker, 200-RPS, 300-second and 10,000-request engine ceilings.
+- Added a user-configurable per-run request budget, with 10,000 as the conservative default.
+- Replaced bounded UI sliders with numeric controls for workers, rate, duration and timeout.
+- Tokio runtime worker threads now use the logical CPU parallelism reported by the operating system.
+- Closed Loop no longer uses a fixed global request-start pacer; worker concurrency and response latency determine natural throughput.
+- Arrival queue capacity now scales with the configured worker count.
+- Kept a bounded recent-sample window for UI/export memory stability while aggregate statistics cover the full run.
+- Made Traffic Lab the application startup tab; retained the earlier Recon tab as a secondary module.
+
 ## [0.2.0] - 2026-11-24
 
 ### Added

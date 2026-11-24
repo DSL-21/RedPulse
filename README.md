@@ -1,8 +1,6 @@
 # RedPulse
 
-**RedPulse** is a native Windows red-team web assessment and HTTP benchmarking workbench written in Rust.
-
-It provides a compact GUI for controlled HTTP GET/POST benchmark runs, live throughput and latency metrics, request-level results, and JSON/CSV exports.
+**RedPulse** is a native Windows HTTP load-testing and infrastructure-resilience workbench written in Rust. It is a portfolio project focused on a high-performance traffic engine, accurate measurements, and practical testing of HTTP services and load-balanced deployments.
 
 [![CI](https://github.com/DSL-21/RedPulse/actions/workflows/ci.yml/badge.svg)](https://github.com/DSL-21/RedPulse/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/DSL-21/RedPulse)](https://github.com/DSL-21/RedPulse/releases/latest)
@@ -10,100 +8,67 @@ It provides a compact GUI for controlled HTTP GET/POST benchmark runs, live thro
 
 ## Download
 
-Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download `RedPulse.exe` from the latest release.
+Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download `RedPulse.exe`. Releases include a SHA-256 checksum.
 
-The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
+## Current capabilities
 
-## Features
+- Native Windows desktop UI built with egui / eframe.
+- Rust async HTTP engine built on Tokio and Reqwest with Rustls.
+- Constant Arrival Rate and Closed Loop traffic-generation models.
+- User-configurable worker count, arrival rate, run duration, timeout, and request budget.
+- No fixed application-level 64-worker or 200-RPS ceiling.
+- Tokio runtime worker threads automatically match the logical CPU parallelism reported by the operating system.
+- Bounded per-run queue sized from the configured worker count.
+- Global request-start pacing removed from Closed Loop; concurrency and response time determine its natural throughput.
+- Live RPS, HTTP status counts, errors, and latency percentiles.
+- Min, average, P50, P95, P99 and max response latency.
+- Request accounting: scheduled, started, completed, queued, in-flight, cancelled and dropped.
+- JSON and CSV export of retained samples.
+- Immediate cancellation and redirect following disabled.
+- Optional Web Recon tab retained from the earlier prototype.
 
-- Native Windows desktop interface using egui / eframe
-- Web Recon module with DNS resolution, HTTP fingerprinting and bounded surface probes
-- Security posture checks for HSTS, CSP, framing, MIME sniffing, cookies and CORS
-- Safe OPTIONS-based HTTP method inspection
-- Public security.txt, robots.txt and sitemap presence checks
-- Evidence-backed findings with severity and remediation guidance
-- HTTP GET and POST requests
-- Configurable load model, worker count, run duration, arrival rate and timeout
-- Constant Arrival Rate mode for fixed-time request arrivals
-- Closed Loop mode for worker-paced requests
-- Independent monotonic arrival scheduler with a bounded worker queue
-- Live request count, observed RPS and a fixed, non-interactive response-time chart with full-run history
-- Min, average, P50, P95, P99 and max HTTP response latency
-- P50 and P95 reference lines on the response-time chart
-- Separate HTTP 2xx, 3xx, 4xx and 5xx counts plus network errors
-- Scheduled, started, completed, queued, in-flight, cancelled and dropped request accounting
-- Per-request result table
-- JSON and CSV report export
-- Immediate cancellation, including in-flight requests
-- Redirect following disabled
-- Bounded response measurement and retained UI samples
-- Rustls TLS backend
-- Global 200 request-starts/second safety ceiling across both load models
-- Hard 10,000 scheduled-request budget per run
-- POST JSON validation and 256 KiB request-body limit
-- Microsecond request completion timestamps and full-timeline min/max chart downsampling
+The current release concentrates on the configurable HTTP traffic engine. Dedicated multi-origin and load-balancer distribution/failover analysis is the next development milestone; the existing Recon tab is not the main product direction.
 
 ## Quick start
 
 1. Download `RedPulse.exe` from [Releases](https://github.com/DSL-21/RedPulse/releases).
-2. Run the executable.
-3. Enter an HTTP or HTTPS endpoint.
-4. Select GET or POST.
-5. Configure workers, duration, request rate and timeout.
-6. Start the test and inspect the live metrics.
-7. Use the Results tab to export JSON or CSV.
+2. Run the executable and open **Traffic Lab**.
+3. Enter the HTTP or HTTPS URL of a test endpoint.
+4. Choose GET or POST and select a load model.
+5. Configure workers, duration, arrival rate, timeout, and total request budget.
+6. Start the run, inspect live measurements, and export the report.
 
-The initial defaults are 5 workers, 30 seconds, 5 requests per second and a 10-second timeout.
-
-## Web Recon
-
-The Recon tab performs a fixed, sequential set of six HTTP probes against the supplied origin:
-
-1. GET the specified target URL (reads at most 128 KiB for technology hints).
-2. HEAD the target URL.
-3. OPTIONS the target URL; advertised methods are inspected but not invoked.
-4. GET `/.well-known/security.txt`.
-5. GET `/robots.txt`.
-6. GET `/sitemap.xml`.
-
-Each probe has a five-second timeout and the sequence spaces requests by 250 ms. Redirects are not followed. The assessment stops early if the service returns HTTP 429 or 503. DNS resolution is performed separately and does not create additional HTTP probes.
-
-The audit reports observable security posture signals including HSTS, CSP, framing protection, MIME sniffing protection, Referrer-Policy, Permissions-Policy, cookie attributes, wildcard CORS with credentials, advertised HTTP methods and technology disclosure headers. Findings include evidence and a remediation suggestion. Fingerprints and missing-header observations are leads for manual verification, not proof of exploitable vulnerabilities.
-
-This first Recon profile deliberately does not perform credential guessing, exploit payload submission, destructive HTTP methods, recursive wordlist discovery or high-volume traffic generation. The existing Load Testing tab remains a separate, bounded feature.
+Defaults are intentionally modest: 5 workers, 30 seconds, 5 requests/second, a 10-second timeout, and a 10,000-request budget. These are starting values, not fixed worker/RPS/request-budget ceilings. The controls accept larger values; actual throughput remains subject to the machine, operating system, network, and target service.
 
 ## Load models
 
-RedPulse provides two distinct request-generation models.
-
 ### Constant Arrival Rate
 
-A monotonic scheduler attempts to create one request arrival at each configured time slot, independently of HTTP response completion. Accepted arrivals enter a bounded queue shared by the workers. The rate ceiling is global rather than multiplied by worker count. A full queue or a missed scheduler slot is recorded as a dropped arrival; RedPulse does not create catch-up bursts. Worker count controls how many requests may be in flight concurrently, while the arrival-rate setting controls the planned pace.
+A monotonic scheduler creates request arrivals at the configured rate independently of response completion. Arrivals enter a bounded queue sized from the configured worker count. When the queue is full or a scheduler slot is missed, the arrival is accounted as dropped rather than producing a catch-up burst. Worker count controls concurrency; the arrival-rate setting controls the planned request pace.
+
+The rate interval uses nanosecond duration granularity. Values beyond the clock's effective resolution cannot produce a faster distinct schedule.
 
 ### Closed Loop
 
-Each worker starts its next request only after its previous request has completed. There is no arrival timer and no waiting queue in this mode. Throughput emerges from worker count and observed response time, so slower responses naturally reduce the number of new requests started. A shared safety pacer caps request starts at 200 per second across all workers; the 10,000-request run budget also applies. The arrival-rate slider is disabled because it does not apply to this model.
+Each worker starts its next request after its previous request completes. There is no arrival timer and no global 200-RPS start pacer. Throughput emerges from configured concurrency and observed response time: slower responses naturally reduce request starts.
 
-Both modes share the same global request-start ceiling, total request budget, request-body validation, response measurement limit, cancellation handling, status classification and latency analytics. Final observed RPS uses the engine's monotonic elapsed duration rather than GUI refresh timing.
+### Configurable run budget
 
-For each request, RedPulse records elapsed time, response latency, status code, measured response size, and any transport or body-read error. Run accounting distinguishes scheduled arrivals, started attempts, completed attempts, queued jobs, in-flight requests, cancelled jobs and dropped arrivals. HTTP response latency statistics include HTTP responses (including 4xx and 5xx) and exclude transport failures such as DNS, connection and timeout errors; those failures are counted separately. Redirects are not followed, so a 3xx response is measured directly rather than silently sending another request. The chart plots the most recent HTTP response samples against elapsed time and includes P50/P95 reference lines. It is intentionally non-interactive: zoom, pan, wheel scaling and double-click reset are disabled so the mouse wheel remains available for scrolling the dashboard.
+The total request budget is user-configurable. It starts at 10,000 requests but can be increased or reduced in the Traffic Lab UI. The engine stops scheduling when the configured budget is reached. Duration and timeout are also user-controlled; values that exceed the platform monotonic clock's representable range are rejected at run start.
 
-## Engine safety limits
+The queue remains bounded to prevent unbounded backlog growth. A bounded queue does not impose a fixed global RPS ceiling; it makes overload visible through the dropped-arrival counter.
 
-The first release uses explicit upper bounds:
+## Hardware and performance notes
 
-| Setting | Range |
-|---|---:|
-| Workers | 1–64 |
-| Constant Arrival Rate | 1–200 request arrivals/second |
-| Global start-rate ceiling | 200 request starts/second in both models |
-| Scheduled request budget | 10,000 per run |
-| Duration | 1–300 seconds |
-| Timeout | 1–60 seconds |
-| POST JSON body | Up to 256 KiB; must be valid JSON |
-| Measured response body | Up to 2 MiB per request |
-| Retained samples | Up to 10,000 per run |
-| Chart rendering | Up to 2,000 min/max-preserving points; full timeline retained |
+The Tokio runtime uses the logical CPU parallelism reported by the operating system instead of clamping runtime threads to eight. Worker tasks are asynchronous and are not one operating-system thread each. Increasing workers can raise concurrent network activity, but it does not guarantee higher throughput: connection limits, target capacity, local socket limits, CPU, memory, and available bandwidth all matter.
+
+A useful benchmark must identify whether the generator, network path, or target is the bottleneck. RedPulse's next performance milestone is to add local generator telemetry and reproducible side-by-side benchmarks against established tools on identical hardware.
+
+## Measurement and retention
+
+For each completed request, RedPulse records elapsed time, response latency, HTTP status, measured response bytes, and transport/body-read errors. HTTP latency percentiles include HTTP responses (including 4xx and 5xx) and exclude transport failures. Redirects are not followed, so the configured endpoint response is measured directly.
+
+The interface retains the most recent 10,000 request samples and the most recent 10,000 chart points for display and export; aggregate counters and latency histogram statistics continue to cover the full run. The response body measurement limit is 2 MiB per request. POST JSON bodies are validated and limited to 256 KiB. These are per-sample memory/measurement safeguards, not global request-rate or worker ceilings.
 
 ## Build from source
 
@@ -130,19 +95,19 @@ The Windows executable is written to:
 target/x86_64-pc-windows-msvc/release/redpulse.exe
 ```
 
-The repository includes a Cargo configuration that statically links the Microsoft C runtime for the Windows x64 target. Windows system DLLs remain normal operating-system dependencies.
-
 ## Reports
 
-- **JSON** contains application metadata, target, method, worker count, generation timestamp, and retained request samples.
+- **JSON** contains application metadata, target, method, configured worker count, traffic model, configured request budget, generation timestamp, final counters, and retained samples.
 - **CSV** contains one row per retained request sample.
 
-Reports are written to the application's current working directory using the names `redpulse-report.json` and `redpulse-report.csv`.
+Reports are written to the application's current working directory using `redpulse-report.json` and `redpulse-report.csv`.
 
 ## Project status
 
-RedPulse 0.2.0 is the seventh public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are planned for later versions.
+RedPulse 0.2.1 removes the old fixed worker, RPS, duration, and global Closed Loop pacing ceilings. The default profile remains conservative, while operators can choose their own run settings. This version is the foundation for the next stages: multi-origin testing, load-balancer distribution and failover analysis, hardware telemetry, traffic profiles, and controlled benchmark comparisons.
+
+Use the tool only against systems you own or are explicitly authorized to test. Set a request budget and duration appropriate for the environment before starting a run.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See `LICENSE`.

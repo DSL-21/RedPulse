@@ -11,11 +11,10 @@ pub struct RunConfig<'a> {
     pub method: &'a str,
     pub workers: usize,
     pub duration_secs: u64,
-    pub request_rate: Option<u32>,
+    pub request_rate: Option<u64>,
     pub load_model: crate::engine::LoadModel,
     pub timeout_secs: u64,
     pub actual_elapsed_secs: f64,
-    pub global_rate_limit_rps: u32,
     pub max_total_requests: u64,
     pub stats: EngineStats,
 }

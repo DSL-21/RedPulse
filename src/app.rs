@@ -10,8 +10,8 @@ use hdrhistogram::Histogram;
 
 use crate::{
     engine::{
-        self, EngineEvent, EngineStats, LoadModel, MAX_REQUEST_BODY_BYTES, MAX_RPS,
-        MAX_TOTAL_REQUESTS, Sample, TestConfig, TestHandle,
+        self, EngineEvent, EngineStats, LoadModel, DEFAULT_MAX_TOTAL_REQUESTS,
+        MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
     },
     recon::ReconState,
     report,
@@ -25,7 +25,7 @@ enum Tab {
     About,
 }
 
-const MAX_UI_SAMPLES: usize = MAX_TOTAL_REQUESTS as usize;
+const MAX_UI_SAMPLES: usize = 10_000;
 const MAX_PLOT_POINTS: usize = 2_000;
 
 fn downsample_min_max(points: &VecDeque<(f64, f64)>, max_points: usize) -> Vec<[f64; 2]> {
@@ -105,7 +105,8 @@ struct RunSnapshot {
     load_model: LoadModel,
     workers: usize,
     duration_secs: u64,
-    request_rate: Option<u32>,
+    request_rate: Option<u64>,
+    max_total_requests: u64,
     timeout_secs: u64,
     actual_elapsed_secs: f64,
 }
@@ -118,7 +119,8 @@ pub struct RedPulseApp {
     load_model: LoadModel,
     workers: usize,
     duration: u64,
-    rps: u32,
+    rps: u64,
+    max_requests: u64,
     timeout: u64,
     body: String,
     running: Option<TestHandle>,
@@ -169,7 +171,7 @@ impl RedPulseApp {
         });
 
         Self {
-            tab: Tab::Recon,
+            tab: Tab::Tester,
             recon: ReconState::new(),
             target: "https://example.com/".into(),
             method: "GET".into(),
@@ -177,6 +179,7 @@ impl RedPulseApp {
             workers: 5,
             duration: 30,
             rps: 5,
+            max_requests: DEFAULT_MAX_TOTAL_REQUESTS,
             timeout: 10,
             body: r#"{ "ping": "redpulse" }"#.into(),
             running: None,
@@ -234,6 +237,7 @@ impl RedPulseApp {
             workers: self.workers,
             duration_secs: self.duration,
             max_requests_per_second: self.rps,
+            max_total_requests: self.max_requests,
             timeout_secs: self.timeout,
             body: self.body.clone(),
         };
@@ -245,6 +249,7 @@ impl RedPulseApp {
             duration_secs: config.duration_secs,
             request_rate: (config.load_model == LoadModel::ConstantArrivalRate)
                 .then_some(config.max_requests_per_second),
+            max_total_requests: config.max_total_requests,
             load_model: config.load_model,
             timeout_secs: config.timeout_secs,
             actual_elapsed_secs: 0.0,
@@ -297,6 +302,9 @@ impl RedPulseApp {
             let micros = (sample.latency_ms * 1000.0).max(1.0) as u64;
             let _ = self.histogram.record(micros.min(60_000_000));
 
+            if self.recent_latencies.len() == MAX_UI_SAMPLES {
+                self.recent_latencies.pop_front();
+            }
             self.recent_latencies
                 .push_back((sample.elapsed_us as f64 / 1_000_000.0, sample.latency_ms));
         }
@@ -409,8 +417,7 @@ impl RedPulseApp {
                 load_model: run.load_model,
                 timeout_secs: run.timeout_secs,
                 actual_elapsed_secs: run.actual_elapsed_secs,
-                global_rate_limit_rps: MAX_RPS,
-                max_total_requests: MAX_TOTAL_REQUESTS,
+                max_total_requests: run.max_total_requests,
                 stats: self.engine_stats,
             };
             report::export_json(&path, &config, &all_samples)
@@ -473,7 +480,7 @@ impl RedPulseApp {
                     .color(egui::Color32::from_rgb(230, 239, 250)),
             );
             ui.label(
-                egui::RichText::new("RED TEAM WORKBENCH")
+                egui::RichText::new("HTTP PERFORMANCE ENGINE")
                     .size(10.0)
                     .strong()
                     .color(egui::Color32::from_rgb(130, 151, 176)),
@@ -511,7 +518,7 @@ impl RedPulseApp {
     fn tester_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.heading(
-            egui::RichText::new("Load Testing")
+            egui::RichText::new("Traffic Lab")
                 .size(23.0)
                 .strong()
                 .color(egui::Color32::from_rgb(235, 242, 250)),
@@ -569,7 +576,7 @@ impl RedPulseApp {
                 ui.label("Workers");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::Slider::new(&mut self.workers, 1..=64),
+                    egui::DragValue::new(&mut self.workers).speed(1).suffix(" concurrent"),
                 );
             });
             ui.add_space(16.0);
@@ -577,7 +584,7 @@ impl RedPulseApp {
                 ui.label("Duration");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::Slider::new(&mut self.duration, 1..=300).suffix(" s"),
+                    egui::DragValue::new(&mut self.duration).speed(1).suffix(" s"),
                 );
             });
             ui.add_space(16.0);
@@ -585,7 +592,7 @@ impl RedPulseApp {
                 ui.label("Arrival rate");
                 ui.add_enabled(
                     self.running.is_none() && self.load_model == LoadModel::ConstantArrivalRate,
-                    egui::Slider::new(&mut self.rps, 1..=200).suffix(" req/s"),
+                    egui::DragValue::new(&mut self.rps).speed(10).suffix(" req/s"),
                 );
             });
             ui.add_space(16.0);
@@ -593,7 +600,7 @@ impl RedPulseApp {
                 ui.label("Timeout");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::Slider::new(&mut self.timeout, 1..=60).suffix(" s"),
+                    egui::DragValue::new(&mut self.timeout).speed(1).suffix(" s"),
                 );
             });
         });
@@ -608,9 +615,16 @@ impl RedPulseApp {
             );
         }
 
+        ui.horizontal(|ui| {
+            ui.label("Request budget");
+            ui.add_enabled(
+                self.running.is_none(),
+                egui::DragValue::new(&mut self.max_requests).speed(100).suffix(" requests"),
+            );
+        });
         ui.label(
             egui::RichText::new(format!(
-                "Engine guardrails: max {MAX_RPS} request starts/s · max {MAX_TOTAL_REQUESTS} requests/run · max {} KiB POST JSON",
+                "No fixed worker or RPS ceiling. The run budget is yours to configure. POST JSON is bounded to {} KiB; response measurement to 2 MiB.",
                 MAX_REQUEST_BODY_BYTES / 1024
             ))
             .small()
@@ -728,7 +742,10 @@ impl RedPulseApp {
         if self.engine_stats.limit_reached {
             ui.colored_label(
                 egui::Color32::from_rgb(238, 178, 82),
-                "Maximum of 10,000 scheduled requests reached; no further requests were started.",
+                format!(
+                    "Configured request budget of {} reached; no further requests were scheduled.",
+                    self.max_requests
+                ),
             );
         }
 
@@ -828,12 +845,13 @@ impl RedPulseApp {
                         .map(|rate| format!("{rate} req/s arrival target"))
                         .unwrap_or_else(|| "throughput determined by workers".into());
                     ui.label(format!(
-                        "{} · {} · {} workers · {} s configured · {} · {} s timeout · {:.3} s measured",
+                        "{} · {} · {} workers · {} s configured · {} · {} request budget · {} s timeout · {:.3} s measured",
                         run.method,
                         run.load_model.label(),
                         run.workers,
                         run.duration_secs,
                         rate_description,
+                        run.max_total_requests,
                         run.timeout_secs,
                         run.actual_elapsed_secs
                     ));
@@ -936,7 +954,7 @@ impl RedPulseApp {
                 .color(egui::Color32::from_rgb(235, 242, 250)),
         );
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-        ui.label("A native Rust desktop red-team web assessment and HTTP benchmarking workbench.");
+        ui.label("A native Rust Windows desktop HTTP load-testing and infrastructure resilience workbench.");
         ui.add_space(8.0);
         ui.label("Engine: Tokio + Reqwest + Rustls");
         ui.label("Interface: egui / eframe");
@@ -984,7 +1002,7 @@ impl eframe::App for RedPulseApp {
                     self.tab = Tab::Recon;
                 }
                 if ui
-                    .selectable_label(self.tab == Tab::Tester, "◉  Load Test")
+                    .selectable_label(self.tab == Tab::Tester, "◉  Traffic Lab")
                     .clicked()
                 {
                     self.tab = Tab::Tester;

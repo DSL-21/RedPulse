@@ -50,7 +50,8 @@ pub struct TestConfig {
     pub load_model: LoadModel,
     pub workers: usize,
     pub duration_secs: u64,
-    pub max_requests_per_second: u32,
+    pub max_requests_per_second: u64,
+    pub max_total_requests: u64,
     pub timeout_secs: u64,
     pub body: String,
 }
@@ -121,13 +122,9 @@ impl Drop for TestHandle {
     }
 }
 
-pub const MAX_WORKERS: usize = 64;
-pub const MAX_RPS: u32 = 200;
-pub const MAX_DURATION_SECS: u64 = 300;
-pub const MAX_TOTAL_REQUESTS: u64 = 10_000;
+pub const DEFAULT_MAX_TOTAL_REQUESTS: u64 = 10_000;
 pub const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_QUEUE_CAPACITY: usize = 128;
 
 #[derive(Default)]
 struct Counters {
@@ -180,23 +177,29 @@ fn validate(config: &TestConfig) -> Result<(), String> {
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err("Credentials in target URLs are not supported. Use headers instead.".into());
     }
-    if !(1..=MAX_WORKERS).contains(&config.workers) {
-        return Err(format!("Workers must be between 1 and {MAX_WORKERS}."));
+    if config.workers == 0 {
+        return Err("At least one worker is required.".into());
+    }
+    let queue_capacity = config
+        .workers
+        .checked_mul(2)
+        .ok_or_else(|| "Worker count is too large to size the bounded queue.".to_string())?;
+    if queue_capacity > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err("Worker count exceeds the platform's bounded-queue capacity.".into());
     }
     if config.load_model == LoadModel::ConstantArrivalRate
-        && !(1..=MAX_RPS).contains(&config.max_requests_per_second)
+        && config.max_requests_per_second == 0
     {
-        return Err(format!(
-            "Arrival rate must be between 1 and {MAX_RPS} requests/second."
-        ));
+        return Err("Arrival rate must be at least 1 request/second.".into());
     }
-    if !(1..=MAX_DURATION_SECS).contains(&config.duration_secs) {
-        return Err(format!(
-            "Duration must be between 1 and {MAX_DURATION_SECS} seconds."
-        ));
+    if config.duration_secs == 0 {
+        return Err("Duration must be at least 1 second.".into());
     }
-    if !(1..=60).contains(&config.timeout_secs) {
-        return Err("Timeout must be between 1 and 60 seconds.".into());
+    if config.max_total_requests == 0 {
+        return Err("Request budget must be at least 1 request.".into());
+    }
+    if config.timeout_secs == 0 {
+        return Err("Timeout must be at least 1 second.".into());
     }
     if !matches!(config.method.as_str(), "GET" | "POST") {
         return Err("Supported methods are GET and POST.".into());
@@ -341,35 +344,11 @@ fn reserve_one(counter: &AtomicU64, maximum: u64) -> bool {
     reserve_slots(counter, 1, maximum) == 1
 }
 
-struct StartPacer {
-    next_slot: tokio::sync::Mutex<Instant>,
-    interval: Duration,
-}
-
-impl StartPacer {
-    fn new(start: Instant, maximum_rate: u32) -> Self {
-        Self {
-            next_slot: tokio::sync::Mutex::new(start),
-            interval: Duration::from_secs_f64(1.0 / maximum_rate as f64),
-        }
-    }
-
-    async fn reserve_slot(&self) -> Instant {
-        let mut next_slot = self.next_slot.lock().await;
-        let now = Instant::now();
-        let slot = (*next_slot).max(now);
-        *next_slot = slot + self.interval;
-        slot
-    }
-
-    async fn wait_turn(&self, stop: Arc<AtomicBool>, deadline: Instant) -> bool {
-        let slot = self.reserve_slot().await;
-        tokio::select! {
-            _ = wait_for_stop(stop) => false,
-            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => false,
-            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(slot)) => true,
-        }
-    }
+fn request_interval(requests_per_second: u64) -> Duration {
+    // Tokio's time driver uses nanosecond duration granularity. Values above
+    // one billion arrivals/second therefore share the 1 ns minimum interval.
+    let nanos = (1_000_000_000u128 / u128::from(requests_per_second)).max(1);
+    Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
 }
 
 async fn perform_request(
@@ -407,7 +386,11 @@ async fn perform_request(
 
 fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>) {
     let runtime = match Builder::new_multi_thread()
-        .worker_threads(config.workers.clamp(2, 8))
+        .worker_threads(
+            thread::available_parallelism()
+                .map(|parallelism| parallelism.get())
+                .unwrap_or(1),
+        )
         .enable_all()
         .build()
     {
@@ -420,7 +403,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
 
     runtime.block_on(async move {
         let client = match Client::builder()
-            .connect_timeout(Duration::from_secs(config.timeout_secs.min(15)))
+            .connect_timeout(Duration::from_secs(config.timeout_secs))
             .timeout(Duration::from_secs(config.timeout_secs))
             .redirect(reqwest::redirect::Policy::none())
             .pool_max_idle_per_host(config.workers)
@@ -442,7 +425,12 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
             Method::GET
         };
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(config.duration_secs);
+        let Some(deadline) = started.checked_add(Duration::from_secs(config.duration_secs)) else {
+            let _ = tx.send(EngineEvent::Fatal(
+                "Configured duration exceeds this platform's monotonic clock range.".into(),
+            ));
+            return;
+        };
         let _ = tx.send(EngineEvent::Started { at: started });
 
         let counters = Arc::new(Counters::default());
@@ -451,11 +439,8 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
 
         match config.load_model {
             LoadModel::ConstantArrivalRate => {
-                let interval = Duration::from_secs_f64(1.0 / config.max_requests_per_second as f64);
-                let queue_capacity = config
-                    .workers
-                    .saturating_mul(2)
-                    .clamp(2, MAX_QUEUE_CAPACITY);
+                let interval = request_interval(config.max_requests_per_second);
+                let queue_capacity = config.workers.saturating_mul(2).max(2);
                 let (job_tx, job_rx) = tokio::sync::mpsc::channel::<()>(queue_capacity);
                 let job_rx = Arc::new(tokio::sync::Mutex::new(job_rx));
 
@@ -522,6 +507,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 let scheduler_stop = Arc::clone(&stop);
                 let scheduler_counters = Arc::clone(&counters);
                 let scheduler_tx = tx.clone();
+                let max_total_requests = config.max_total_requests;
                 scheduler = Some(tokio::spawn(async move {
                     let mut next_slot = started;
                     loop {
@@ -542,7 +528,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             let missed = reserve_slots(
                                 &scheduler_counters.scheduled,
                                 overdue,
-                                MAX_TOTAL_REQUESTS,
+                                max_total_requests,
                             );
                             if missed > 0 {
                                 scheduler_counters
@@ -558,7 +544,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 break;
                             }
                             if scheduler_counters.scheduled.load(Ordering::Relaxed)
-                                >= MAX_TOTAL_REQUESTS
+                                >= max_total_requests
                             {
                                 scheduler_counters
                                     .limit_reached
@@ -571,7 +557,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             break;
                         }
 
-                        if !reserve_one(&scheduler_counters.scheduled, MAX_TOTAL_REQUESTS) {
+                        if !reserve_one(&scheduler_counters.scheduled, max_total_requests) {
                             scheduler_counters
                                 .limit_reached
                                 .store(true, Ordering::Relaxed);
@@ -585,7 +571,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                         next_slot += interval;
 
                         if scheduler_counters.scheduled.load(Ordering::Relaxed)
-                            >= MAX_TOTAL_REQUESTS
+                            >= max_total_requests
                         {
                             scheduler_counters
                                 .limit_reached
@@ -597,16 +583,15 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 }));
             }
             LoadModel::ClosedLoop => {
-                // Closed-loop mode has no arrival timer or waiting queue.
-                // All workers share a monotonic global start-rate pacer and
-                // a hard per-run request budget.
-                let pacer = Arc::new(StartPacer::new(started, MAX_RPS));
+                // Closed-loop mode has no arrival timer or global rate cap.
+                // Worker concurrency and the user-defined run budget control
+                // the workload; response time naturally feeds back into RPS.
+                let max_total_requests = config.max_total_requests;
                 for _ in 0..config.workers {
                     let client = client.clone();
                     let worker_tx = tx.clone();
                     let worker_stop = Arc::clone(&stop);
                     let worker_counters = Arc::clone(&counters);
-                    let worker_pacer = Arc::clone(&pacer);
                     let url = config.url.clone();
                     let body = config.body.clone();
                     let method = method.clone();
@@ -616,13 +601,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             if worker_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
                                 break;
                             }
-                            if !worker_pacer
-                                .wait_turn(Arc::clone(&worker_stop), deadline)
-                                .await
-                            {
-                                break;
-                            }
-                            if !reserve_one(&worker_counters.scheduled, MAX_TOTAL_REQUESTS) {
+                            if !reserve_one(&worker_counters.scheduled, max_total_requests) {
                                 worker_counters.limit_reached.store(true, Ordering::Relaxed);
                                 emit_stats(&worker_tx, &worker_counters);
                                 break;
@@ -694,6 +673,7 @@ mod tests {
             workers: 2,
             duration_secs: 10,
             max_requests_per_second: 5,
+            max_total_requests: DEFAULT_MAX_TOTAL_REQUESTS,
             timeout_secs: 5,
             body: String::new(),
         }
@@ -715,17 +695,38 @@ mod tests {
     }
 
     #[test]
-    fn rejects_excessive_worker_count() {
+    fn accepts_user_configured_high_worker_and_arrival_values() {
         let mut cfg = config("https://example.com");
-        cfg.workers = MAX_WORKERS + 1;
+        cfg.workers = 4_096;
+        cfg.max_requests_per_second = 1_000_000;
+        cfg.max_total_requests = 2_000_000;
+        assert!(validate(&cfg).is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_worker_rate_duration_and_request_budget() {
+        let mut cfg = config("https://example.com");
+        cfg.workers = 0;
+        assert!(validate(&cfg).is_err());
+
+        let mut cfg = config("https://example.com");
+        cfg.max_requests_per_second = 0;
+        assert!(validate(&cfg).is_err());
+
+        let mut cfg = config("https://example.com");
+        cfg.duration_secs = 0;
+        assert!(validate(&cfg).is_err());
+
+        let mut cfg = config("https://example.com");
+        cfg.max_total_requests = 0;
         assert!(validate(&cfg).is_err());
     }
 
     #[test]
-    fn rejects_excessive_request_rate_for_constant_arrivals() {
-        let mut cfg = config("https://example.com");
-        cfg.max_requests_per_second = MAX_RPS + 1;
-        assert!(validate(&cfg).is_err());
+    fn request_interval_scales_beyond_the_old_rate_ceiling() {
+        assert_eq!(request_interval(200), Duration::from_millis(5));
+        assert_eq!(request_interval(1_000_000), Duration::from_micros(1));
+        assert_eq!(request_interval(2_000_000_000), Duration::from_nanos(1));
     }
 
     #[test]
@@ -753,13 +754,14 @@ mod tests {
     }
 
     #[test]
-    fn request_budget_cannot_be_exceeded() {
+    fn request_budget_obeys_the_user_configured_cap() {
         let counter = AtomicU64::new(0);
-        assert_eq!(reserve_slots(&counter, 2, 3), 2);
-        assert!(reserve_one(&counter, 3));
-        assert!(!reserve_one(&counter, 3));
-        assert_eq!(reserve_slots(&counter, 100, 3), 0);
-        assert_eq!(counter.load(Ordering::Relaxed), 3);
+        let configured_budget = 3;
+        assert_eq!(reserve_slots(&counter, 2, configured_budget), 2);
+        assert!(reserve_one(&counter, configured_budget));
+        assert!(!reserve_one(&counter, configured_budget));
+        assert_eq!(reserve_slots(&counter, 100, configured_budget), 0);
+        assert_eq!(counter.load(Ordering::Relaxed), configured_budget);
     }
 
     #[test]
@@ -939,29 +941,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn closed_loop_global_pacer_reserves_spaced_start_slots() {
-        let now = Instant::now();
-        let pacer = StartPacer::new(now, MAX_RPS);
-        let mut slots = Vec::new();
-
-        for _ in 0..5 {
-            slots.push(pacer.reserve_slot().await);
-        }
-
-        for pair in slots.windows(2) {
-            assert!(
-                pair[1].duration_since(pair[0]) >= Duration::from_millis(5),
-                "global safety pacer must reserve slots at least one interval apart"
-            );
-        }
-
-        let deadline = Instant::now() + Duration::from_secs(1);
-        let stop = Arc::new(AtomicBool::new(false));
-        assert!(pacer.wait_turn(stop, deadline).await);
-    }
-
-    #[test]
+remove obsolete pacer test    #[test]
     fn closed_loop_reports_request_timeout_as_network_error() {
         let listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("bind timeout test server");
