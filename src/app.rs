@@ -612,7 +612,7 @@ impl RedPulseApp {
             .iter()
             .map(|(x, y)| [*x, *y])
             .collect();
-        if points.is_empty() {
+        if self.recent_latencies.is_empty() {
             ui.label("Waiting for HTTP response samples…");
         } else {
             let plot = Plot::new(("latency_plot", self.plot_view_revision))
