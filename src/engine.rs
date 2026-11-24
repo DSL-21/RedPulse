@@ -395,8 +395,6 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         let scheduler_tx = tx.clone();
         let scheduler = tokio::spawn(async move {
             let mut next_slot = started;
-            let interval_nanos = interval.as_nanos().max(1);
-
             loop {
                 tokio::select! {
                     _ = wait_for_stop(Arc::clone(&scheduler_stop)) => break,
@@ -543,6 +541,64 @@ mod tests {
         assert_eq!(finished.in_flight, 0);
         assert_eq!(finished.cancelled, 2);
         assert_eq!(finished.dropped, 1);
+    }
+
+    #[test]
+    fn arrival_scheduler_runs_independently_of_slow_workers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind slow local test server");
+        let address = listener.local_addr().expect("local server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            thread::sleep(Duration::from_millis(2_500));
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nok",
+            );
+        });
+
+        let mut cfg = config(&format!("http://{address}/"));
+        cfg.workers = 1;
+        cfg.duration_secs = 2;
+        cfg.max_requests_per_second = 5;
+        cfg.timeout_secs = 5;
+        let mut handle = start(cfg).expect("start slow-response benchmark");
+
+        let mut max_queued = 0;
+        let mut max_in_flight = 0;
+        let stats = loop {
+            match handle
+                .rx
+                .recv_timeout(Duration::from_secs(4))
+                .expect("receive engine event")
+            {
+                EngineEvent::Started { .. } => {}
+                EngineEvent::Stats(snapshot) => {
+                    max_queued = max_queued.max(snapshot.queued);
+                    max_in_flight = max_in_flight.max(snapshot.in_flight);
+                }
+                EngineEvent::Sample(_) => {}
+                EngineEvent::Finished { stats, .. } => break stats,
+                EngineEvent::Fatal(message) => panic!("engine failed: {message}"),
+            }
+        };
+
+        handle.join();
+        server.join().expect("slow local server thread");
+
+        assert!(stats.scheduled >= 8, "scheduler should keep producing arrival slots");
+        assert_eq!(stats.started, 1, "one worker can have only one active request");
+        assert_eq!(stats.completed, 0, "the response is slower than the run duration");
+        assert!(stats.dropped > 0, "a full bounded queue must count dropped arrivals");
+        assert!(max_queued > 0, "scheduled arrivals should be visible in the queue");
+        assert!(max_in_flight > 0, "the active request should be counted in flight");
+        assert_eq!(stats.queued, 0);
+        assert_eq!(stats.in_flight, 0);
+        assert_eq!(
+            stats.cancelled,
+            stats.scheduled - stats.dropped - stats.completed
+        );
     }
 
     #[test]
