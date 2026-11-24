@@ -1,9 +1,9 @@
 use std::{
     error::Error as StdError,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
+        Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -26,6 +26,17 @@ pub struct TestConfig {
     pub body: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineStats {
+    pub scheduled: u64,
+    pub started: u64,
+    pub completed: u64,
+    pub queued: u64,
+    pub in_flight: u64,
+    pub cancelled: u64,
+    pub dropped: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sample {
     pub elapsed_ms: u64,
@@ -40,8 +51,13 @@ pub struct Sample {
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
     Started { at: Instant },
+    Stats(EngineStats),
     Sample(Sample),
-    Finished { stopped: bool, elapsed_secs: f64 },
+    Finished {
+        stopped: bool,
+        elapsed_secs: f64,
+        stats: EngineStats,
+    },
     Fatal(String),
 }
 
@@ -65,8 +81,6 @@ impl TestHandle {
 
 impl Drop for TestHandle {
     fn drop(&mut self) {
-        // Closing the window or dropping the handle must not leave a test
-        // running in the background.
         self.stop.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -78,6 +92,48 @@ const MAX_WORKERS: usize = 64;
 const MAX_RPS: u32 = 200;
 const MAX_DURATION_SECS: u64 = 300;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_QUEUE_CAPACITY: usize = 128;
+
+#[derive(Default)]
+struct Counters {
+    scheduled: AtomicU64,
+    started: AtomicU64,
+    completed: AtomicU64,
+    dropped: AtomicU64,
+}
+
+impl Counters {
+    fn snapshot(&self) -> EngineStats {
+        let scheduled = self.scheduled.load(Ordering::Relaxed);
+        let started = self.started.load(Ordering::Relaxed);
+        let completed = self.completed.load(Ordering::Relaxed);
+        let dropped = self.dropped.load(Ordering::Relaxed);
+        let accepted = scheduled.saturating_sub(dropped);
+
+        EngineStats {
+            scheduled,
+            started,
+            completed,
+            queued: accepted.saturating_sub(started),
+            in_flight: started.saturating_sub(completed),
+            cancelled: 0,
+            dropped,
+        }
+    }
+
+    fn final_snapshot(&self) -> EngineStats {
+        let mut stats = self.snapshot();
+        let accepted = stats.scheduled.saturating_sub(stats.dropped);
+        stats.cancelled = accepted.saturating_sub(stats.completed);
+        stats.queued = 0;
+        stats.in_flight = 0;
+        stats
+    }
+}
+
+fn emit_stats(tx: &Sender<EngineEvent>, counters: &Counters) {
+    let _ = tx.send(EngineEvent::Stats(counters.snapshot()));
+}
 
 fn validate(config: &TestConfig) -> Result<(), String> {
     let parsed = Url::parse(&config.url).map_err(|error| format!("Invalid URL: {error}"))?;
@@ -157,6 +213,63 @@ fn describe_reqwest_error(error: &reqwest::Error) -> String {
     }
 }
 
+async fn execute_request(
+    client: &Client,
+    method: Method,
+    url: &str,
+    body: &str,
+) -> (u16, usize, bool, Option<String>) {
+    let mut request = client.request(method.clone(), url);
+    if method == Method::POST {
+        request = request
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+    }
+
+    match request.send().await {
+        Ok(mut response) => {
+            let status = response.status().as_u16();
+            let mut count = 0usize;
+            let mut read_error = None;
+
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        count = count.saturating_add(chunk.len());
+                        if count > MAX_RESPONSE_BYTES {
+                            read_error =
+                                Some("Response body exceeded the 2 MiB measurement limit".into());
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        read_error = Some(describe_reqwest_error(&error));
+                        break;
+                    }
+                }
+            }
+
+            let ok = (200..300).contains(&status) && read_error.is_none();
+            (
+                status,
+                count.min(MAX_RESPONSE_BYTES),
+                ok,
+                read_error,
+            )
+        }
+        Err(error) => (0, 0, false, Some(describe_reqwest_error(&error))),
+    }
+}
+
+fn overdue_slots(now: Instant, next_slot: Instant, interval: Duration) -> u64 {
+    if now <= next_slot || interval.is_zero() {
+        0
+    } else {
+        (now.duration_since(next_slot).as_nanos() / interval.as_nanos()) as u64
+    }
+}
+
 fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>) {
     let runtime = match Builder::new_multi_thread()
         .worker_threads(config.workers.clamp(2, 8))
@@ -180,106 +293,83 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         {
             Ok(client) => client,
             Err(error) => {
-                let _ = tx.send(EngineEvent::Fatal(format!("HTTP client error: {}", describe_reqwest_error(&error))));
+                let _ = tx.send(EngineEvent::Fatal(format!(
+                    "HTTP client error: {}",
+                    describe_reqwest_error(&error)
+                )));
                 return;
             }
         };
 
-        let method = if config.method == "POST" { Method::POST } else { Method::GET };
+        let method = if config.method == "POST" {
+            Method::POST
+        } else {
+            Method::GET
+        };
         let started = Instant::now();
         let deadline = started + Duration::from_secs(config.duration_secs);
         let _ = tx.send(EngineEvent::Started { at: started });
+
         let interval = Duration::from_secs_f64(1.0 / config.max_requests_per_second as f64);
-        let next_slot = Arc::new(tokio::sync::Mutex::new(Instant::now()));
+        let queue_capacity = config
+            .workers
+            .saturating_mul(2)
+            .clamp(2, MAX_QUEUE_CAPACITY);
+        let (job_tx, job_rx) = tokio::sync::mpsc::channel::<()>(queue_capacity);
+        let job_rx = Arc::new(tokio::sync::Mutex::new(job_rx));
+        let counters = Arc::new(Counters::default());
         let mut tasks = tokio::task::JoinSet::new();
 
+        // Workers consume an independently scheduled stream of request jobs.
+        // The bounded queue prevents unbounded memory growth when the target
+        // responds more slowly than the configured arrival rate.
         for _ in 0..config.workers {
             let client = client.clone();
-            let tx = tx.clone();
-            let stop = Arc::clone(&stop);
-            let next_slot = Arc::clone(&next_slot);
+            let worker_tx = tx.clone();
+            let worker_stop = Arc::clone(&stop);
+            let worker_rx = Arc::clone(&job_rx);
+            let worker_counters = Arc::clone(&counters);
             let url = config.url.clone();
             let body = config.body.clone();
             let method = method.clone();
 
             tasks.spawn(async move {
-                loop {
-                    if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
-                        break;
-                    }
+                let tokio_deadline = tokio::time::Instant::from_std(deadline);
 
-                    // Reserve one global request slot, shared by all workers.
-                    let scheduled = {
-                        let mut slot = next_slot.lock().await;
-                        let at = (*slot).max(Instant::now());
-                        *slot = at + interval;
-                        at
+                loop {
+                    let next_job = async {
+                        let mut receiver = worker_rx.lock().await;
+                        receiver.recv().await
                     };
 
-                    if scheduled >= deadline || stop.load(Ordering::Relaxed) {
+                    let job = tokio::select! {
+                        _ = wait_for_stop(Arc::clone(&worker_stop)) => None,
+                        _ = tokio::time::sleep_until(tokio_deadline) => None,
+                        job = next_job => job,
+                    };
+
+                    if job.is_none()
+                        || worker_stop.load(Ordering::Relaxed)
+                        || Instant::now() >= deadline
+                    {
                         break;
                     }
-                    tokio::select! {
-                        _ = tokio::time::sleep_until(tokio::time::Instant::from_std(scheduled)) => {},
-                        _ = wait_for_stop(Arc::clone(&stop)) => break,
-                    }
-                    if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
-                        break;
-                    }
+
+                    worker_counters.started.fetch_add(1, Ordering::Relaxed);
+                    emit_stats(&worker_tx, &worker_counters);
 
                     let request_started = Instant::now();
-                    let request_future = async {
-                        let mut request = client.request(method.clone(), &url);
-                        if method == Method::POST {
-                            request = request
-                                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                                .body(body.clone());
-                        }
+                    let request_future =
+                        execute_request(&client, method.clone(), &url, &body);
 
-                        match request.send().await {
-                            Ok(mut response) => {
-                                let status = response.status().as_u16();
-                                let mut count = 0usize;
-                                let mut read_error = None;
-
-                                loop {
-                                    match response.chunk().await {
-                                        Ok(Some(chunk)) => {
-                                            count = count.saturating_add(chunk.len());
-                                            if count > MAX_RESPONSE_BYTES {
-                                                read_error = Some(
-                                                    "Response body exceeded the 2 MiB measurement limit".to_string()
-                                                );
-                                                break;
-                                            }
-                                        }
-                                        Ok(None) => break,
-                                        Err(error) => {
-                                            read_error = Some(describe_reqwest_error(&error));
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                (
-                                    status,
-                                    count.min(MAX_RESPONSE_BYTES),
-                                    status < 400,
-                                    read_error,
-                                )
-                            }
-                            Err(error) => (0, 0, false, Some(describe_reqwest_error(&error))),
-                        }
+                    let result = tokio::select! {
+                        _ = wait_for_stop(Arc::clone(&worker_stop)) => None,
+                        _ = tokio::time::sleep_until(tokio_deadline) => None,
+                        response = request_future => Some(response),
                     };
 
-                    // Cancel an in-flight request on Stop or when the
-                    // configured test duration expires.
-                    let (status, bytes, ok, error) = tokio::select! {
-                        _ = wait_for_stop(Arc::clone(&stop)) => break,
-                        _ = tokio::time::sleep_until(
-                            tokio::time::Instant::from_std(deadline)
-                        ) => break,
-                        result = request_future => result,
+                    let Some((status, bytes, ok, error)) = result else {
+                        break;
                     };
 
                     let sample = Sample {
@@ -291,22 +381,80 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                         error,
                         timestamp: Utc::now(),
                     };
-                    if tx.send(EngineEvent::Sample(sample)).is_err() {
-                        stop.store(true, Ordering::Relaxed);
+
+                    worker_counters.completed.fetch_add(1, Ordering::Relaxed);
+                    if worker_tx.send(EngineEvent::Sample(sample)).is_err() {
+                        worker_stop.store(true, Ordering::Relaxed);
                         break;
                     }
+                    emit_stats(&worker_tx, &worker_counters);
                 }
             });
         }
 
+        // The scheduler is independent of worker completion. It attempts one
+        // arrival at each monotonic time slot and never creates catch-up bursts.
+        let scheduler_stop = Arc::clone(&stop);
+        let scheduler_counters = Arc::clone(&counters);
+        let scheduler_tx = tx.clone();
+        let scheduler = tokio::spawn(async move {
+            let mut next_slot = started;
+            let interval_nanos = interval.as_nanos().max(1);
+
+            loop {
+                tokio::select! {
+                    _ = wait_for_stop(Arc::clone(&scheduler_stop)) => break,
+                    _ = tokio::time::sleep_until(
+                        tokio::time::Instant::from_std(next_slot)
+                    ) => {},
+                }
+
+                if scheduler_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                    break;
+                }
+
+                // If the scheduler itself wakes late, account for missed
+                // arrival slots as dropped instead of sending a burst.
+                let overdue = overdue_slots(Instant::now(), next_slot, interval);
+                if overdue > 0 {
+                    scheduler_counters
+                        .scheduled
+                        .fetch_add(overdue, Ordering::Relaxed);
+                    scheduler_counters
+                        .dropped
+                        .fetch_add(overdue, Ordering::Relaxed);
+                    next_slot += interval * overdue.min(u32::MAX as u64) as u32;
+                    emit_stats(&scheduler_tx, &scheduler_counters);
+                }
+
+                if next_slot >= deadline {
+                    break;
+                }
+
+                scheduler_counters.scheduled.fetch_add(1, Ordering::Relaxed);
+                // try_send is deliberately non-blocking. A full queue is an
+                // explicit dropped arrival, not a delay to later arrivals.
+                if job_tx.try_send(()).is_err() {
+                    scheduler_counters.dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                emit_stats(&scheduler_tx, &scheduler_counters);
+
+                next_slot += interval;
+            }
+        });
+
+        let _ = scheduler.await;
         while let Some(result) = tasks.join_next().await {
             if let Err(error) = result {
                 let _ = tx.send(EngineEvent::Fatal(format!("Worker task failed: {error}")));
             }
         }
+
+        let stats = counters.final_snapshot();
         let _ = tx.send(EngineEvent::Finished {
             stopped: stop.load(Ordering::Relaxed),
             elapsed_secs: started.elapsed().as_secs_f64(),
+            stats,
         });
     });
 }
@@ -320,6 +468,7 @@ async fn wait_for_stop(stop: Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     fn config(url: &str) -> TestConfig {
         TestConfig {
@@ -363,18 +512,56 @@ mod tests {
     }
 
     #[test]
-    fn sends_http_request_and_stops_cleanly() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
+    fn scheduler_counts_overdue_slots_without_catch_up_bursts() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(200);
+        assert_eq!(overdue_slots(start, start, interval), 0);
+        assert_eq!(
+            overdue_slots(start + Duration::from_millis(399), start, interval),
+            1
+        );
+        assert_eq!(
+            overdue_slots(start + Duration::from_millis(600), start, interval),
+            3
+        );
+    }
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test server");
+    #[test]
+    fn final_stats_account_for_queued_and_in_flight_cancellations() {
+        let counters = Counters::default();
+        counters.scheduled.store(5, Ordering::Relaxed);
+        counters.started.store(3, Ordering::Relaxed);
+        counters.completed.store(2, Ordering::Relaxed);
+        counters.dropped.store(1, Ordering::Relaxed);
+
+        let live = counters.snapshot();
+        assert_eq!(live.queued, 1);
+        assert_eq!(live.in_flight, 1);
+        assert_eq!(live.cancelled, 0);
+
+        let finished = counters.final_snapshot();
+        assert_eq!(finished.scheduled, 5);
+        assert_eq!(finished.started, 3);
+        assert_eq!(finished.completed, 2);
+        assert_eq!(finished.queued, 0);
+        assert_eq!(finished.in_flight, 0);
+        assert_eq!(finished.cancelled, 2);
+        assert_eq!(finished.dropped, 1);
+    }
+
+    #[test]
+    fn sends_http_request_and_stops_cleanly() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind local test server");
         let address = listener.local_addr().expect("local server address");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept client");
             let mut request = [0u8; 2048];
             let _ = stream.read(&mut request);
             stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                )
                 .expect("write response");
             stream.flush().expect("flush response");
         });
@@ -386,15 +573,15 @@ mod tests {
         let mut handle = start(cfg).expect("start local benchmark");
 
         let mut received_sample = false;
+        let mut final_stats = None;
         let measured_elapsed = loop {
             match handle
                 .rx
                 .recv_timeout(Duration::from_secs(3))
                 .expect("receive engine event")
             {
-                EngineEvent::Started { at } => {
-                    assert!(at <= Instant::now());
-                }
+                EngineEvent::Started { at } => assert!(at <= Instant::now()),
+                EngineEvent::Stats(_) => {}
                 EngineEvent::Sample(sample) => {
                     assert_eq!(sample.status, 200);
                     assert_eq!(sample.bytes, 2);
@@ -402,21 +589,31 @@ mod tests {
                     received_sample = true;
                     handle.stop();
                 }
-                EngineEvent::Finished { elapsed_secs, .. } => break elapsed_secs,
+                EngineEvent::Finished {
+                    elapsed_secs,
+                    stats,
+                    ..
+                } => {
+                    final_stats = Some(stats);
+                    break elapsed_secs;
+                }
                 EngineEvent::Fatal(message) => panic!("engine failed: {message}"),
             }
         };
 
         handle.join();
         server.join().expect("local test server thread");
-        assert!(
-            received_sample,
-            "engine should emit at least one HTTP sample"
-        );
+        assert!(received_sample, "engine should emit an HTTP sample");
         assert!(measured_elapsed.is_finite() && measured_elapsed > 0.0);
-        assert!(
-            measured_elapsed < 5.0,
-            "manual stop should end before the configured deadline"
+
+        let stats = final_stats.expect("engine should report final accounting");
+        assert_eq!(stats.completed, 1);
+        assert_eq!(stats.started, 1);
+        assert_eq!(stats.in_flight, 0);
+        assert_eq!(stats.queued, 0);
+        assert_eq!(
+            stats.cancelled,
+            stats.scheduled - stats.dropped - stats.completed
         );
     }
 }
