@@ -19,11 +19,12 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 - Native Windows desktop interface using egui / eframe
 - HTTP GET and POST requests
 - Configurable worker count, run duration, global request-rate ceiling and timeout
-- One shared request scheduler across all workers
+- Independent monotonic arrival scheduler with a bounded worker queue
 - Live request count, observed RPS and a fixed, non-interactive response-time chart
 - Min, average, P50, P95, P99 and max HTTP response latency
 - P50 and P95 reference lines on the response-time chart
-- HTTP status classes and network error counts
+- Separate HTTP 2xx, 3xx, 4xx and 5xx counts plus network errors
+- Scheduled, started, completed, queued, in-flight, cancelled and dropped request accounting
 - Per-request result table
 - JSON and CSV report export
 - Immediate cancellation, including in-flight requests
@@ -45,11 +46,11 @@ The initial defaults are 5 workers, 30 seconds, 5 requests per second and a 10-s
 
 ## How the engine works
 
-RedPulse starts a Tokio runtime on a dedicated engine thread. A configured number of asynchronous workers share one scheduler. Each worker reserves a time slot from that shared scheduler, so the configured request-rate ceiling is global rather than multiplied by the number of workers.
+RedPulse starts a Tokio runtime on a dedicated engine thread. A monotonic arrival scheduler runs independently from the asynchronous HTTP workers. It attempts one request arrival at each configured time slot and places accepted jobs into a bounded queue shared by the workers. The rate ceiling is global rather than multiplied by the number of workers. A full queue is recorded as a dropped arrival instead of delaying or bursting later arrivals.
 
-Worker count controls how many requests may be in flight concurrently. The request-rate setting controls the maximum pace at which new requests are scheduled. Actual observed throughput can be lower than the configured ceiling when the server, network, or client cannot complete requests quickly enough. The engine reports its own monotonic start instant and measured elapsed duration; the final observed RPS uses that measured duration rather than the GUI refresh interval.
+Worker count controls how many requests may be in flight concurrently. The request-rate setting controls the intended arrival pace independently of response completion time. The queue is capped at twice the worker count (up to 128 jobs). Actual observed throughput can be lower than the configured ceiling when the server, network, or client cannot complete requests quickly enough. The engine reports its own monotonic start instant and measured elapsed duration; the final observed RPS uses that measured duration rather than the GUI refresh interval.
 
-For each request, RedPulse records elapsed time, response latency, status code, measured response size, and any transport or body-read error. HTTP response latency statistics include HTTP responses (including 4xx and 5xx) and exclude transport failures such as DNS, connection and timeout errors; those failures are counted separately. Redirects are not followed, so a 3xx response is measured directly rather than silently sending another request. The chart plots the most recent HTTP response samples against elapsed time and includes P50/P95 reference lines. It is intentionally non-interactive: zoom, pan, wheel scaling and double-click reset are disabled so the mouse wheel remains available for scrolling the dashboard.
+For each request, RedPulse records elapsed time, response latency, status code, measured response size, and any transport or body-read error. Run accounting distinguishes scheduled arrivals, started attempts, completed attempts, queued jobs, in-flight requests, cancelled jobs and dropped arrivals. HTTP response latency statistics include HTTP responses (including 4xx and 5xx) and exclude transport failures such as DNS, connection and timeout errors; those failures are counted separately. Redirects are not followed, so a 3xx response is measured directly rather than silently sending another request. The chart plots the most recent HTTP response samples against elapsed time and includes P50/P95 reference lines. It is intentionally non-interactive: zoom, pan, wheel scaling and double-click reset are disabled so the mouse wheel remains available for scrolling the dashboard.
 
 ## Initial release limits
 
@@ -102,7 +103,7 @@ Reports are written to the application's current working directory using the nam
 
 ## Project status
 
-RedPulse 0.1.3 is the fourth public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are not part of this initial version.
+RedPulse 0.1.4 is the fifth public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are not part of this initial version.
 
 ## License
 

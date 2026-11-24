@@ -3,7 +3,7 @@ use std::{fs::File, io::Write, path::Path};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::engine::Sample;
+use crate::engine::{EngineStats, Sample};
 
 #[derive(Serialize)]
 pub struct RunConfig<'a> {
@@ -14,6 +14,7 @@ pub struct RunConfig<'a> {
     pub request_rate: u32,
     pub timeout_secs: u64,
     pub actual_elapsed_secs: f64,
+    pub stats: EngineStats,
 }
 
 #[derive(Serialize)]
@@ -40,20 +41,32 @@ pub fn export_json(path: &Path, config: &RunConfig<'_>, samples: &[Sample]) -> R
     Ok(())
 }
 
+fn status_class(status: u16) -> &'static str {
+    match status / 100 {
+        0 => "network_error",
+        2 => "http_2xx",
+        3 => "http_3xx",
+        4 => "http_4xx",
+        5 => "http_5xx",
+        _ => "other",
+    }
+}
+
 pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     let mut file = File::create(path).context("Could not create CSV file")?;
     writeln!(
         file,
-        "elapsed_ms,latency_ms,status,bytes,ok,error,timestamp"
+        "elapsed_ms,latency_ms,status,status_class,bytes,ok,error,timestamp"
     )?;
     for sample in samples {
         let error = sample.error.as_deref().unwrap_or("").replace('"', "\"\"");
         writeln!(
             file,
-            "{},{:.3},{},{},{},\"{}\",{}",
+            "{},{:.3},{},{},{},{},\"{}\",{}",
             sample.elapsed_ms,
             sample.latency_ms,
             sample.status,
+            status_class(sample.status),
             sample.bytes,
             sample.ok,
             error,

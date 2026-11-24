@@ -2,6 +2,20 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.1.4] - 2026-11-24
+
+### Added
+- Independent monotonic arrival scheduler that is decoupled from worker completion.
+- Bounded asynchronous worker queue (up to twice the worker count, maximum 128 jobs).
+- Explicit request accounting: scheduled, started, completed, queued, in-flight, cancelled and dropped.
+- Separate HTTP 2xx, 3xx, 4xx and 5xx classification.
+- Run accounting included in JSON exports and HTTP status class included in CSV exports.
+- Tests for scheduler slot accounting, final cancellation accounting and HTTP status classification.
+
+### Changed
+- A full worker queue drops and records an arrival instead of delaying later schedule slots or creating catch-up bursts.
+- HTTP 3xx responses are counted separately from successful 2xx responses.
+
 ## [0.1.3] - 2026-11-24
 
 ### Changed
