@@ -137,7 +137,7 @@ pub enum EngineEvent {
         at: Instant,
     },
     Stats(EngineStats),
-    Sample(Sample),
+    Samples(Vec<Sample>),
     Hardware(HardwareSample),
     Finished {
         stopped: bool,
@@ -720,6 +720,55 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         );
 
         let counters = Arc::new(Counters::default());
+        let sample_queue_capacity = config.workers.saturating_mul(64).clamp(256, 65_536);
+        let (sample_tx, mut sample_rx) =
+            tokio::sync::mpsc::channel::<Sample>(sample_queue_capacity);
+        let sample_publisher = {
+            let sample_event_tx = tx.clone();
+            tokio::spawn(async move {
+                const BATCH_SIZE: usize = 64;
+                let mut batch = Vec::with_capacity(BATCH_SIZE);
+                let mut ticker = tokio::time::interval(Duration::from_millis(50));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+                loop {
+                    tokio::select! {
+                        sample = sample_rx.recv() => {
+                            match sample {
+                                Some(sample) => {
+                                    batch.push(sample);
+                                    if batch.len() >= BATCH_SIZE {
+                                        let ready = std::mem::replace(
+                                            &mut batch,
+                                            Vec::with_capacity(BATCH_SIZE),
+                                        );
+                                        if sample_event_tx.send(EngineEvent::Samples(ready)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        _ = ticker.tick() => {
+                            if !batch.is_empty() {
+                                let ready = std::mem::replace(
+                                    &mut batch,
+                                    Vec::with_capacity(BATCH_SIZE),
+                                );
+                                if sample_event_tx.send(EngineEvent::Samples(ready)).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !batch.is_empty() {
+                    let _ = sample_event_tx.send(EngineEvent::Samples(batch));
+                }
+            })
+        };
         let stats_task = {
             let stats_tx = tx.clone();
             let stats_counters = Arc::clone(&counters);
@@ -749,7 +798,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 for _ in 0..config.workers {
                     let worker_routes = Arc::clone(&origin_routes);
                     let worker_route_cursor = Arc::clone(&route_cursor);
-                    let worker_tx = tx.clone();
+                    let worker_sample_tx = sample_tx.clone();
                     let worker_stop = Arc::clone(&stop);
                     let worker_rx = job_rx.clone();
                     let worker_counters = Arc::clone(&counters);
@@ -788,7 +837,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             };
 
                             worker_counters.completed.fetch_add(1, Ordering::Relaxed);
-                            if worker_tx.send(EngineEvent::Sample(sample)).is_err() {
+                            if worker_sample_tx.send(sample).await.is_err() {
                                 worker_stop.store(true, Ordering::Relaxed);
                                 break;
                             }
@@ -877,7 +926,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 for _ in 0..config.workers {
                     let worker_routes = Arc::clone(&origin_routes);
                     let worker_route_cursor = Arc::clone(&route_cursor);
-                    let worker_tx = tx.clone();
+                    let worker_sample_tx = sample_tx.clone();
                     let worker_stop = Arc::clone(&stop);
                     let worker_counters = Arc::clone(&counters);
                     let worker_request = request_spec.clone();
@@ -909,7 +958,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             };
 
                             worker_counters.completed.fetch_add(1, Ordering::Relaxed);
-                            if worker_tx.send(EngineEvent::Sample(sample)).is_err() {
+                            if worker_sample_tx.send(sample).await.is_err() {
                                 worker_stop.store(true, Ordering::Relaxed);
                                 break;
                             }
@@ -927,6 +976,8 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                 let _ = tx.send(EngineEvent::Fatal(format!("Worker task failed: {error}")));
             }
         }
+        drop(sample_tx);
+        let _ = sample_publisher.await;
         if let Some(monitor) = hardware_monitor {
             let _ = monitor.join();
         }
@@ -1192,7 +1243,7 @@ mod tests {
                 EngineEvent::OriginsResolved { .. }
                 | EngineEvent::Started { .. }
                 | EngineEvent::Stats(_)
-                | EngineEvent::Sample(_)
+                | EngineEvent::Samples(_)
                 | EngineEvent::Hardware(_) => {}
                 EngineEvent::Finished { stats, .. } => break stats,
                 EngineEvent::Fatal(message) => panic!("closed-loop engine failed: {message}"),
@@ -1248,7 +1299,7 @@ mod tests {
                     max_queued = max_queued.max(snapshot.queued);
                     max_in_flight = max_in_flight.max(snapshot.in_flight);
                 }
-                EngineEvent::Sample(_) | EngineEvent::Hardware(_) => {}
+                EngineEvent::Samples(_) | EngineEvent::Hardware(_) => {}
                 EngineEvent::Finished { stats, .. } => break stats,
                 EngineEvent::Fatal(message) => panic!("engine failed: {message}"),
             }
@@ -1320,9 +1371,9 @@ mod tests {
                 | EngineEvent::Started { .. }
                 | EngineEvent::Stats(_)
                 | EngineEvent::Hardware(_) => {}
-                EngineEvent::Sample(sample) => {
+                EngineEvent::Samples(mut samples) => {
                     handle.stop();
-                    break sample;
+                    break samples.pop().expect("sample batch should not be empty");
                 }
                 EngineEvent::Finished { .. } => panic!("run finished before timeout sample"),
                 EngineEvent::Fatal(message) => panic!("timeout benchmark failed: {message}"),
@@ -1339,7 +1390,7 @@ mod tests {
                 EngineEvent::OriginsResolved { .. }
                 | EngineEvent::Started { .. }
                 | EngineEvent::Stats(_)
-                | EngineEvent::Sample(_)
+                | EngineEvent::Samples(_)
                 | EngineEvent::Hardware(_) => {}
                 EngineEvent::Fatal(message) => panic!("timeout benchmark failed: {message}"),
             }
@@ -1391,11 +1442,13 @@ mod tests {
                 EngineEvent::OriginsResolved { .. } => {}
                 EngineEvent::Started { at } => assert!(at <= Instant::now()),
                 EngineEvent::Stats(_) | EngineEvent::Hardware(_) => {}
-                EngineEvent::Sample(sample) => {
-                    assert_eq!(sample.status, 200);
-                    assert_eq!(sample.bytes, 2);
-                    assert!(sample.ok);
-                    received_sample = true;
+                EngineEvent::Samples(samples) => {
+                    for sample in samples {
+                        assert_eq!(sample.status, 200);
+                        assert_eq!(sample.bytes, 2);
+                        assert!(sample.ok);
+                        received_sample = true;
+                    }
                     handle.stop();
                 }
                 EngineEvent::Finished {
