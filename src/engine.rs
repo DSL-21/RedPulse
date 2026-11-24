@@ -561,13 +561,18 @@ fn spawn_hardware_monitor(
         .name("redpulse-hardware-monitor".into())
         .spawn(move || {
             use sysinfo::{
-                Networks, ProcessRefreshKind, ProcessesToUpdate, System,
+                CpuRefreshKind, MemoryRefreshKind, Networks, ProcessRefreshKind,
+                ProcessesToUpdate, RefreshKind, System,
             };
 
             let Ok(pid) = sysinfo::get_current_pid() else {
                 return;
             };
-            let Ok(mut system) = System::new() else {
+            let Ok(mut system) = System::new_with_specifics(
+                RefreshKind::nothing()
+                    .with_cpu(CpuRefreshKind::everything())
+                    .with_memory(MemoryRefreshKind::everything()),
+            ) else {
                 return;
             };
             let Ok(mut networks) = Networks::new_with_refreshed_list() else {
@@ -1308,7 +1313,8 @@ mod tests {
             {
                 EngineEvent::OriginsResolved { .. }
                 | EngineEvent::Started { .. }
-                | EngineEvent::Stats(_) => {}
+                | EngineEvent::Stats(_)
+                | EngineEvent::Hardware(_) => {}
                 EngineEvent::Sample(sample) => {
                     handle.stop();
                     break sample;
@@ -1379,7 +1385,7 @@ mod tests {
             {
                 EngineEvent::OriginsResolved { .. } => {}
                 EngineEvent::Started { at } => assert!(at <= Instant::now()),
-                EngineEvent::Stats(_) => {}
+                EngineEvent::Stats(_) | EngineEvent::Hardware(_) => {}
                 EngineEvent::Sample(sample) => {
                     assert_eq!(sample.status, 200);
                     assert_eq!(sample.bytes, 2);
