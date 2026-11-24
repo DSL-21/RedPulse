@@ -2,6 +2,17 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.4.0] - 2026-11-24
+
+### Added
+- Optional response-header backend identity capture, configurable in Traffic Lab (for example `X-Backend-ID`).
+- Live and historical backend request distribution based on identifiers explicitly returned by the tested application.
+- Backend identity retained per sample and included in JSON and CSV reports.
+
+### Fixed
+- Grouped HTTP request settings into a request specification so strict Clippy checks pass without suppressing lints.
+- CSV text fields, including origin IP, backend identifier, and error details, are consistently quoted and escaped.
+
 ## [0.3.0] - 2026-11-24
 
 ### Added
