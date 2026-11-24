@@ -1,4 +1,5 @@
 use std::{
+    error::Error as StdError,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -126,6 +127,36 @@ pub fn start(config: TestConfig) -> Result<TestHandle, String> {
     })
 }
 
+fn describe_reqwest_error(error: &reqwest::Error) -> String {
+    let category = if error.is_timeout() {
+        "Request timed out"
+    } else if error.is_connect() {
+        "Connection error"
+    } else if error.is_body() {
+        "Response body error"
+    } else if error.is_decode() {
+        "Response decoding error"
+    } else {
+        "HTTP request error"
+    };
+
+    let mut details = Vec::new();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let detail = cause.to_string();
+        if !detail.is_empty() && !details.contains(&detail) {
+            details.push(detail);
+        }
+        source = cause.source();
+    }
+
+    if details.is_empty() {
+        format!("{category}: {error}")
+    } else {
+        format!("{category}: {error} — {}", details.join(" → "))
+    }
+}
+
 fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>) {
     let runtime = match Builder::new_multi_thread()
         .worker_threads(config.workers.clamp(2, 8))
@@ -149,7 +180,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         {
             Ok(client) => client,
             Err(error) => {
-                let _ = tx.send(EngineEvent::Fatal(format!("HTTP client error: {error}")));
+                let _ = tx.send(EngineEvent::Fatal(format!("HTTP client error: {}", describe_reqwest_error(&error))));
                 return;
             }
         };
@@ -224,7 +255,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                         }
                                         Ok(None) => break,
                                         Err(error) => {
-                                            read_error = Some(format!("Body read error: {error}"));
+                                            read_error = Some(describe_reqwest_error(&error));
                                             break;
                                         }
                                     }
@@ -237,7 +268,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                     read_error,
                                 )
                             }
-                            Err(error) => (0, 0, false, Some(error.to_string())),
+                            Err(error) => (0, 0, false, Some(describe_reqwest_error(&error))),
                         }
                     };
 
