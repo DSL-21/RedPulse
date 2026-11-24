@@ -51,7 +51,6 @@ struct RunSnapshot {
     workers: usize,
     duration_secs: u64,
     request_rate: Option<u32>,
-    load_model: LoadModel,
     timeout_secs: u64,
     actual_elapsed_secs: f64,
 }
@@ -60,6 +59,7 @@ pub struct RedPulseApp {
     tab: Tab,
     target: String,
     method: String,
+    load_model: LoadModel,
     workers: usize,
     duration: u64,
     rps: u32,
