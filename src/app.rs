@@ -10,8 +10,8 @@ use hdrhistogram::Histogram;
 
 use crate::{
     engine::{
-        self, EngineEvent, EngineStats, LoadModel, Sample, TestConfig, TestHandle,
-        MAX_REQUEST_BODY_BYTES, MAX_RPS, MAX_TOTAL_REQUESTS,
+        self, EngineEvent, EngineStats, LoadModel, MAX_REQUEST_BODY_BYTES, MAX_RPS,
+        MAX_TOTAL_REQUESTS, Sample, TestConfig, TestHandle,
     },
     report,
 };
@@ -26,10 +26,7 @@ enum Tab {
 const MAX_UI_SAMPLES: usize = MAX_TOTAL_REQUESTS as usize;
 const MAX_PLOT_POINTS: usize = 2_000;
 
-fn downsample_min_max(
-    points: &VecDeque<(f64, f64)>,
-    max_points: usize,
-) -> Vec<[f64; 2]> {
+fn downsample_min_max(points: &VecDeque<(f64, f64)>, max_points: usize) -> Vec<[f64; 2]> {
     let mut sorted: Vec<[f64; 2]> = points.iter().map(|(x, y)| [*x, *y]).collect();
     sorted.sort_by(|left, right| left[0].total_cmp(&right[0]));
 
@@ -741,14 +738,13 @@ impl RedPulseApp {
                         self.recent_latencies.len(),
                         downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).len()
                     ))
-                        .small()
-                        .color(egui::Color32::from_rgb(135, 153, 176)),
+                    .small()
+                    .color(egui::Color32::from_rgb(135, 153, 176)),
                 );
             });
         });
 
-        let points: PlotPoints =
-            downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
+        let points: PlotPoints = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
         if self.recent_latencies.is_empty() {
             ui.label("Waiting for HTTP response samples…");
         } else {
@@ -1075,7 +1071,6 @@ mod load_model_ui_tests {
     }
 }
 
-
 #[cfg(test)]
 mod chart_downsampling_tests {
     use super::downsample_min_max;
@@ -1083,8 +1078,9 @@ mod chart_downsampling_tests {
 
     #[test]
     fn chart_downsampling_retains_full_time_range() {
-        let points: VecDeque<(f64, f64)> =
-            (0..10_000).map(|index| (index as f64 / 100.0, 50.0)).collect();
+        let points: VecDeque<(f64, f64)> = (0..10_000)
+            .map(|index| (index as f64 / 100.0, 50.0))
+            .collect();
 
         let reduced = downsample_min_max(&points, 2_000);
         assert!(reduced.len() <= 2_000);

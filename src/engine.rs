@@ -544,18 +544,24 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 MAX_TOTAL_REQUESTS,
                             );
                             if missed > 0 {
-                                scheduler_counters.dropped.fetch_add(missed, Ordering::Relaxed);
+                                scheduler_counters
+                                    .dropped
+                                    .fetch_add(missed, Ordering::Relaxed);
                             }
                             next_slot += interval * missed.min(u32::MAX as u64) as u32;
                             emit_stats(&scheduler_tx, &scheduler_counters);
                             if missed < overdue {
-                                scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                                scheduler_counters
+                                    .limit_reached
+                                    .store(true, Ordering::Relaxed);
                                 break;
                             }
                             if scheduler_counters.scheduled.load(Ordering::Relaxed)
                                 >= MAX_TOTAL_REQUESTS
                             {
-                                scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                                scheduler_counters
+                                    .limit_reached
+                                    .store(true, Ordering::Relaxed);
                                 break;
                             }
                         }
@@ -565,7 +571,9 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                         }
 
                         if !reserve_one(&scheduler_counters.scheduled, MAX_TOTAL_REQUESTS) {
-                            scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                            scheduler_counters
+                                .limit_reached
+                                .store(true, Ordering::Relaxed);
                             emit_stats(&scheduler_tx, &scheduler_counters);
                             break;
                         }
@@ -578,7 +586,9 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                         if scheduler_counters.scheduled.load(Ordering::Relaxed)
                             >= MAX_TOTAL_REQUESTS
                         {
-                            scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                            scheduler_counters
+                                .limit_reached
+                                .store(true, Ordering::Relaxed);
                             emit_stats(&scheduler_tx, &scheduler_counters);
                             break;
                         }
@@ -959,9 +969,8 @@ mod tests {
             let mut request = [0u8; 2048];
             let _ = stream.read(&mut request);
             thread::sleep(Duration::from_millis(1_400));
-            let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-            );
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
         });
 
         let mut cfg = config(&format!("http://{address}/"));
@@ -1004,7 +1013,12 @@ mod tests {
         assert_eq!(sample.status, 0);
         assert!(!sample.ok);
         assert!(
-            sample.error.as_deref().unwrap_or("").to_lowercase().contains("timed out"),
+            sample
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("timed out"),
             "timeout should be classified clearly"
         );
         assert!(sample.elapsed_us >= 900_000);
