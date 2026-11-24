@@ -62,6 +62,17 @@ impl TestHandle {
     }
 }
 
+impl Drop for TestHandle {
+    fn drop(&mut self) {
+        // Closing the window or dropping the handle must not leave a test
+        // running in the background.
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
 const MAX_WORKERS: usize = 64;
 const MAX_RPS: u32 = 200;
 const MAX_DURATION_SECS: u64 = 300;
@@ -178,38 +189,58 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     }
 
                     let request_started = Instant::now();
-                    let mut request = client.request(method.clone(), &url);
-                    if method == Method::POST {
-                        request = request
-                            .header(reqwest::header::CONTENT_TYPE, "application/json")
-                            .body(body.clone());
-                    }
+                    let request_future = async {
+                        let mut request = client.request(method.clone(), &url);
+                        if method == Method::POST {
+                            request = request
+                                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                                .body(body.clone());
+                        }
 
-                    let result = request.send().await;
-                    let (status, bytes, ok, error) = match result {
-                        Ok(mut response) => {
-                            let status = response.status().as_u16();
-                            let mut count = 0usize;
-                            let mut read_error = None;
-                            loop {
-                                match response.chunk().await {
-                                    Ok(Some(chunk)) => {
-                                        count = count.saturating_add(chunk.len());
-                                        if count > MAX_RESPONSE_BYTES {
-                                            read_error = Some("Response body exceeded the 2 MiB measurement limit".to_string());
+                        match request.send().await {
+                            Ok(mut response) => {
+                                let status = response.status().as_u16();
+                                let mut count = 0usize;
+                                let mut read_error = None;
+
+                                loop {
+                                    match response.chunk().await {
+                                        Ok(Some(chunk)) => {
+                                            count = count.saturating_add(chunk.len());
+                                            if count > MAX_RESPONSE_BYTES {
+                                                read_error = Some(
+                                                    "Response body exceeded the 2 MiB measurement limit".to_string()
+                                                );
+                                                break;
+                                            }
+                                        }
+                                        Ok(None) => break,
+                                        Err(error) => {
+                                            read_error = Some(format!("Body read error: {error}"));
                                             break;
                                         }
                                     }
-                                    Ok(None) => break,
-                                    Err(error) => {
-                                        read_error = Some(format!("Body read error: {error}"));
-                                        break;
-                                    }
                                 }
+
+                                (
+                                    status,
+                                    count.min(MAX_RESPONSE_BYTES),
+                                    status < 400,
+                                    read_error,
+                                )
                             }
-                            (status, count.min(MAX_RESPONSE_BYTES), status < 400, read_error)
+                            Err(error) => (0, 0, false, Some(error.to_string())),
                         }
-                        Err(error) => (0, 0, false, Some(error.to_string())),
+                    };
+
+                    // Cancel an in-flight request on Stop or when the
+                    // configured test duration expires.
+                    let (status, bytes, ok, error) = tokio::select! {
+                        _ = wait_for_stop(Arc::clone(&stop)) => break,
+                        _ = tokio::time::sleep_until(
+                            tokio::time::Instant::from_std(deadline)
+                        ) => break,
+                        result = request_future => result,
                     };
 
                     let sample = Sample {
