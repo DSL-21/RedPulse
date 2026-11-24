@@ -280,7 +280,10 @@ impl RedPulseApp {
     fn metric_card(ui: &mut egui::Ui, label: &str, value: impl ToString, unit: &str) {
         egui::Frame::group(ui.style())
             .fill(egui::Color32::from_rgb(25, 34, 48))
-            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(48, 65, 86)))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                egui::Color32::from_rgb(48, 65, 86),
+            ))
             .corner_radius(12)
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
@@ -559,7 +562,10 @@ impl RedPulseApp {
         if let Some(run) = &self.last_run {
             egui::Frame::group(ui.style())
                 .fill(egui::Color32::from_rgb(22, 29, 41))
-                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 61, 81)))
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgb(45, 61, 81),
+                ))
                 .corner_radius(12)
                 .inner_margin(12)
                 .show(ui, |ui| {
