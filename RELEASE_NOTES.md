@@ -1,19 +1,22 @@
-# RedPulse 0.3.0
+# RedPulse 0.4.0
 
-RedPulse 0.3.0 adds the first Multi-IP testing capability to Traffic Lab.
+RedPulse 0.4.0 completes the first backend-attribution milestone on top of the 0.3.0 configurable HTTP load engine and DNS-based Multi-IP routing.
 
-## DNS origin routing
+## Backend attribution
 
-- **System DNS** keeps the normal system resolver and HTTP client behavior.
-- **Round-robin DNS IPs** resolves the target hostname once, collects unique IPv4 and IPv6 addresses, and assigns successive requests across that address list.
-- The request URL remains the original hostname. Reqwest DNS overrides pin the socket destination while the HTTP Host value and HTTPS hostname remain derived from the URL.
-- Pinned mode makes direct origin connections and bypasses system proxy settings, because a proxy would otherwise resolve the hostname remotely.
-- Every completed request records its selected origin IP. The UI shows per-IP request counts, the Results table includes the origin IP, and CSV/JSON reports preserve this attribution.
+- Configure an optional response header in Traffic Lab, such as `X-Backend-ID` or `X-Served-By`.
+- RedPulse captures the header value on every HTTP response and aggregates request counts by backend identifier.
+- The live Traffic Lab view and Results view display the observed backend distribution.
+- JSON and CSV samples include the backend identifier alongside the selected origin IP.
+- Leave the header field empty to disable backend attribution.
 
-## Important distinction
+This feature reports only information explicitly returned by the target application. It does not claim to discover hidden backend nodes or infer load-balancer routing when no backend identifier is exposed.
 
-DNS IP rotation tests the addresses published for the hostname. It does not reveal private backend nodes behind a public load balancer when those nodes are not exposed through DNS. Backend distribution analysis using response headers or application-provided node identifiers remains a separate feature.
+## Engine and report quality
+
+- Refactored request options into a dedicated request specification, keeping the engine interface maintainable and passing strict Clippy checks without lint suppression.
+- CSV text fields are consistently quoted and escaped, including values containing commas, quotes, or line breaks.
 
 ## Validation
 
-The release pipeline runs formatting, Rust unit tests, Clippy with warnings denied, and the optimized Windows x64 release build.
+The release pipeline runs Rust formatting, the complete unit test suite, Clippy with warnings denied, and an optimized Windows x64 release build. The generated executable is packaged with a SHA-256 checksum.
