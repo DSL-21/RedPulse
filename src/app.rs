@@ -448,6 +448,7 @@ impl RedPulseApp {
             "redpulse-report.json"
         });
         let all_samples: Vec<Sample> = self.samples.iter().cloned().collect();
+        let hardware_samples: Vec<_> = self.hardware_samples.iter().cloned().collect();
         let result = if csv {
             report::export_csv(&path, &all_samples)
         } else if let Some(run) = &self.last_run {
@@ -465,7 +466,7 @@ impl RedPulseApp {
                 backend_id_header: &run.backend_id_header,
                 resolved_addresses: &run.resolved_addresses,
                 stats: self.engine_stats,
-                hardware_samples: &self.hardware_samples,
+                hardware_samples: &hardware_samples,
             };
             report::export_json(&path, &config, &all_samples)
         } else {
@@ -937,11 +938,11 @@ impl RedPulseApp {
                 .show(ui, |plot_ui| {
                     plot_ui.line(
                         Line::new("RedPulse process capacity", cpu_points)
-                            .width(1.8),
+                            .width(1.8_f32),
                     );
                     plot_ui.line(
                         Line::new("Whole host", host_points)
-                            .width(1.4),
+                            .width(1.4_f32),
                     );
                 });
         } else {
