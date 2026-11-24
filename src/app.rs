@@ -629,7 +629,7 @@ impl RedPulseApp {
                 plot_ui.line(
                     Line::new("Response latency", points)
                         .color(egui::Color32::from_rgb(83, 183, 246))
-                        .width(2.0),
+                        .width(2.0_f32),
                 );
                 if self.http_response_count > 0 {
                     let x_end = self.elapsed_seconds.max(0.01);
