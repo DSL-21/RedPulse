@@ -66,20 +66,22 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     let mut file = File::create(path).context("Could not create CSV file")?;
     writeln!(
         file,
-        "elapsed_us,elapsed_ms,latency_ms,status,status_class,endpoint_ip,backend_id,bytes,ok,error,timestamp"
+        "elapsed_us,elapsed_ms,latency_ms,status,status_class,http_version,endpoint_ip,backend_id,bytes,ok,error,timestamp"
     )?;
     for sample in samples {
+        let http_version = csv_field(sample.http_version.as_deref().unwrap_or(""));
         let error = csv_field(sample.error.as_deref().unwrap_or(""));
         let endpoint_ip = csv_field(sample.endpoint_ip.as_deref().unwrap_or(""));
         let backend_id = csv_field(sample.backend_id.as_deref().unwrap_or(""));
         writeln!(
             file,
-            "{},{},{:.3},{},{},{},{},{},{},{},{}",
+            "{},{},{:.3},{},{},{},{},{},{},{},{},{}",
             sample.elapsed_us,
             sample.elapsed_ms,
             sample.latency_ms,
             sample.status,
             status_class(sample.status),
+            http_version,
             endpoint_ip,
             backend_id,
             sample.bytes,
