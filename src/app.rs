@@ -250,7 +250,11 @@ impl RedPulseApp {
     }
 
     fn export(&mut self, csv: bool) {
-        let path = PathBuf::from(if csv { "redpulse-report.csv" } else { "redpulse-report.json" });
+        let path = PathBuf::from(if csv {
+            "redpulse-report.csv"
+        } else {
+            "redpulse-report.json"
+        });
         let all_samples: Vec<Sample> = self.samples.iter().cloned().collect();
         let result = if csv {
             report::export_csv(&path, &all_samples)
@@ -363,8 +367,10 @@ impl RedPulseApp {
                 .color(egui::Color32::from_rgb(235, 242, 250)),
         );
         ui.label(
-            egui::RichText::new("Configure a request profile and watch the server response in real time.")
-                .color(egui::Color32::from_rgb(143, 160, 181)),
+            egui::RichText::new(
+                "Configure a request profile and watch the server response in real time.",
+            )
+            .color(egui::Color32::from_rgb(143, 160, 181)),
         );
         ui.add_space(12.0);
         ui.heading("Test configuration");
@@ -473,16 +479,46 @@ impl RedPulseApp {
 
         ui.columns(4, |columns| {
             Self::metric_card(&mut columns[0], "TOTAL REQUESTS", self.total_received, "");
-            Self::metric_card(&mut columns[1], "OBSERVED THROUGHPUT", format!("{rps:.2}"), "RPS");
+            Self::metric_card(
+                &mut columns[1],
+                "OBSERVED THROUGHPUT",
+                format!("{rps:.2}"),
+                "RPS",
+            );
             Self::metric_card(&mut columns[2], "SUCCESSFUL", self.total_success, "");
-            Self::metric_card(&mut columns[3], "CLIENT ERRORS", self.total_client_errors, "");
+            Self::metric_card(
+                &mut columns[3],
+                "CLIENT ERRORS",
+                self.total_client_errors,
+                "",
+            );
         });
         ui.add_space(8.0);
         ui.columns(4, |columns| {
-            Self::metric_card(&mut columns[0], "SERVER ERRORS", self.total_server_errors, "");
-            Self::metric_card(&mut columns[1], "NETWORK ERRORS", self.total_network_errors, "");
-            Self::metric_card(&mut columns[2], "AVERAGE LATENCY", format!("{avg:.1}"), "ms");
-            Self::metric_card(&mut columns[3], "P95 / P99", format!("{p95:.1} / {p99:.1}"), "ms");
+            Self::metric_card(
+                &mut columns[0],
+                "SERVER ERRORS",
+                self.total_server_errors,
+                "",
+            );
+            Self::metric_card(
+                &mut columns[1],
+                "NETWORK ERRORS",
+                self.total_network_errors,
+                "",
+            );
+            Self::metric_card(
+                &mut columns[2],
+                "AVERAGE LATENCY",
+                format!("{avg:.1}"),
+                "ms",
+            );
+            Self::metric_card(
+                &mut columns[3],
+                "P95 / P99",
+                format!("{p95:.1} / {p99:.1}"),
+                "ms",
+            );
         });
         ui.label(
             egui::RichText::new(format!(
@@ -541,7 +577,11 @@ impl RedPulseApp {
                     );
                     ui.label(format!(
                         "{} · {} workers · {} s · {} req/s cap · {} s timeout",
-                        run.method, run.workers, run.duration_secs, run.request_rate, run.timeout_secs
+                        run.method,
+                        run.workers,
+                        run.duration_secs,
+                        run.request_rate,
+                        run.timeout_secs
                     ));
                 });
         }
