@@ -2,6 +2,23 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.1.2] - 2026-11-24
+
+### Added
+- Engine-reported monotonic start time and measured elapsed duration.
+- Final observed throughput calculated from the engine's measured duration.
+- Minimum and maximum HTTP response latency metrics.
+- P50 and P95 reference lines on the response-time chart.
+- Explicit elapsed-time and response-latency axis labels.
+- Reset View control and double-click chart reset.
+- Actual measured duration included in JSON run metadata.
+- Tests for RPS calculation and engine elapsed-time reporting.
+
+### Fixed
+- Final RPS no longer depends on the last GUI repaint interval.
+- Transport errors and timeouts are excluded from HTTP response latency percentiles and reported separately.
+- Empty response charts show a waiting state instead of an unlabelled empty plot.
+
 ## [0.1.1] - 2026-11-24
 
 ### Added
