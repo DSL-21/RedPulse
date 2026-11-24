@@ -41,10 +41,7 @@ pub struct Sample {
 pub enum EngineEvent {
     Started { at: Instant },
     Sample(Sample),
-    Finished {
-        stopped: bool,
-        elapsed_secs: f64,
-    },
+    Finished { stopped: bool, elapsed_secs: f64 },
     Fatal(String),
 }
 
@@ -422,6 +419,9 @@ mod tests {
         );
         let elapsed = measured_elapsed.expect("engine should report its elapsed time");
         assert!(elapsed.is_finite() && elapsed > 0.0);
-        assert!(elapsed < 5.0, "manual stop should end before the configured deadline");
+        assert!(
+            elapsed < 5.0,
+            "manual stop should end before the configured deadline"
+        );
     }
 }

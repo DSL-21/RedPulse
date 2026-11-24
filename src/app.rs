@@ -633,10 +633,8 @@ impl RedPulseApp {
                 );
                 if self.http_response_count > 0 {
                     let x_end = self.elapsed_seconds.max(0.01);
-                    let p50_points: PlotPoints =
-                        vec![[0.0, p50], [x_end, p50]].into();
-                    let p95_points: PlotPoints =
-                        vec![[0.0, p95], [x_end, p95]].into();
+                    let p50_points: PlotPoints = vec![[0.0, p50], [x_end, p50]].into();
+                    let p95_points: PlotPoints = vec![[0.0, p95], [x_end, p95]].into();
                     plot_ui.line(
                         Line::new("P50", p50_points)
                             .color(egui::Color32::from_rgb(76, 195, 142))
@@ -722,7 +720,11 @@ impl RedPulseApp {
         ui.label(format!(
             "Min {min:.2} ms · Average {avg:.2} ms · P50 {p50:.2} ms · P95 {p95:.2} ms · P99 {p99:.2} ms · Max {max:.2} ms"
         ));
-        ui.label(format!("Observed throughput: {:.2} RPS over {:.3} seconds", self.observed_rps(), self.elapsed_seconds));
+        ui.label(format!(
+            "Observed throughput: {:.2} RPS over {:.3} seconds",
+            self.observed_rps(),
+            self.elapsed_seconds
+        ));
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -845,7 +847,6 @@ impl eframe::App for RedPulseApp {
         });
     }
 }
-
 
 #[cfg(test)]
 mod tests {
