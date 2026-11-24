@@ -22,6 +22,16 @@ enum Tab {
 
 const MAX_UI_SAMPLES: usize = 20_000;
 
+#[derive(Clone)]
+struct RunSnapshot {
+    target: String,
+    method: String,
+    workers: usize,
+    duration_secs: u64,
+    request_rate: u32,
+    timeout_secs: u64,
+}
+
 pub struct RedPulseApp {
     tab: Tab,
     target: String,
@@ -46,12 +56,32 @@ pub struct RedPulseApp {
     total_network_errors: u64,
     latency_sum_ms: f64,
     histogram: Histogram<u64>,
+    last_run: Option<RunSnapshot>,
 }
 
 impl RedPulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let visuals = egui::Visuals::dark();
+        let mut visuals = egui::Visuals::dark();
+        visuals.panel_fill = egui::Color32::from_rgb(17, 22, 31);
+        visuals.window_fill = egui::Color32::from_rgb(21, 27, 38);
+        visuals.extreme_bg_color = egui::Color32::from_rgb(10, 14, 21);
+        visuals.faint_bg_color = egui::Color32::from_rgb(29, 37, 51);
+        visuals.override_text_color = Some(egui::Color32::from_rgb(226, 233, 243));
+        visuals.selection.bg_fill = egui::Color32::from_rgb(34, 125, 190);
+        visuals.hyperlink_color = egui::Color32::from_rgb(102, 190, 255);
+        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(24, 31, 43);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(37, 47, 63);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(47, 65, 87);
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(35, 119, 174);
+        visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(8);
+        visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
+        visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
+        visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
         cc.egui_ctx.set_visuals(visuals);
+        cc.egui_ctx.style_mut(|style| {
+            style.spacing.item_spacing = egui::vec2(10.0, 9.0);
+            style.spacing.button_padding = egui::vec2(13.0, 8.0);
+        });
 
         Self {
             tab: Tab::Tester,
@@ -77,6 +107,7 @@ impl RedPulseApp {
             total_network_errors: 0,
             latency_sum_ms: 0.0,
             histogram: Histogram::<u64>::new(3).expect("valid histogram configuration"),
+            last_run: None,
         }
     }
 
@@ -91,6 +122,7 @@ impl RedPulseApp {
         self.latency_sum_ms = 0.0;
         self.histogram.reset();
         self.elapsed_seconds = 0.0;
+        self.last_run = None;
     }
 
     fn start_test(&mut self) {
@@ -108,8 +140,18 @@ impl RedPulseApp {
             body: self.body.clone(),
         };
 
+        let snapshot = RunSnapshot {
+            target: config.url.clone(),
+            method: config.method.clone(),
+            workers: config.workers,
+            duration_secs: config.duration_secs,
+            request_rate: config.max_requests_per_second,
+            timeout_secs: config.timeout_secs,
+        };
+
         match engine::start(config) {
             Ok(handle) => {
+                self.last_run = Some(snapshot);
                 self.running = Some(handle);
                 self.started = Some(Instant::now());
                 self.status = "Running".into();
@@ -208,22 +250,23 @@ impl RedPulseApp {
     }
 
     fn export(&mut self, csv: bool) {
-        let path = PathBuf::from(if csv {
-            "redpulse-report.csv"
-        } else {
-            "redpulse-report.json"
-        });
+        let path = PathBuf::from(if csv { "redpulse-report.csv" } else { "redpulse-report.json" });
         let all_samples: Vec<Sample> = self.samples.iter().cloned().collect();
         let result = if csv {
             report::export_csv(&path, &all_samples)
-        } else {
+        } else if let Some(run) = &self.last_run {
             report::export_json(
                 &path,
-                &self.target,
-                &self.method,
-                self.workers,
+                &run.target,
+                &run.method,
+                run.workers,
+                run.duration_secs,
+                run.request_rate,
+                run.timeout_secs,
                 &all_samples,
             )
+        } else {
+            Err(anyhow::anyhow!("There is no test run to export."))
         };
         match result {
             Ok(()) => self.last_export = Some(format!("Saved {}", path.display())),
@@ -233,53 +276,97 @@ impl RedPulseApp {
 
     fn metric_card(ui: &mut egui::Ui, label: &str, value: impl ToString, unit: &str) {
         egui::Frame::group(ui.style())
-            .fill(egui::Color32::from_rgb(27, 34, 46))
-            .corner_radius(10)
-            .inner_margin(12)
+            .fill(egui::Color32::from_rgb(25, 34, 48))
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(48, 65, 86)))
+            .corner_radius(12)
+            .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.set_min_height(68.0);
                 ui.label(
                     egui::RichText::new(label)
-                        .small()
-                        .color(egui::Color32::GRAY),
+                        .size(10.5)
+                        .strong()
+                        .color(egui::Color32::from_rgb(145, 163, 185)),
                 );
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new(value.to_string()).size(25.0).strong());
-                    ui.label(egui::RichText::new(unit).small().color(egui::Color32::GRAY));
+                    ui.heading(
+                        egui::RichText::new(value.to_string())
+                            .size(24.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(232, 241, 251)),
+                    );
+                    ui.label(
+                        egui::RichText::new(unit)
+                            .small()
+                            .color(egui::Color32::from_rgb(145, 163, 185)),
+                    );
                 });
             });
     }
 
     fn header(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading(
-                egui::RichText::new("◉ REDPULSE")
-                    .size(22.0)
+            ui.label(
+                egui::RichText::new("◈")
+                    .size(24.0)
                     .strong()
-                    .color(egui::Color32::from_rgb(93, 180, 255)),
+                    .color(egui::Color32::from_rgb(68, 180, 245)),
+            );
+            ui.heading(
+                egui::RichText::new("REDPULSE")
+                    .size(21.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(230, 239, 250)),
             );
             ui.label(
-                egui::RichText::new("HTTP BENCHMARK WORKBENCH")
-                    .small()
-                    .color(egui::Color32::GRAY),
+                egui::RichText::new("HTTP BENCHMARK")
+                    .size(10.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(130, 151, 176)),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let color = if self.running.is_some() {
-                    egui::Color32::from_rgb(70, 200, 130)
+                let (color, status) = if self.running.is_some() {
+                    (egui::Color32::from_rgb(73, 205, 145), "RUNNING")
+                } else if self.status == "Completed" {
+                    (egui::Color32::from_rgb(76, 181, 132), "COMPLETED")
+                } else if self.status == "Failed" {
+                    (egui::Color32::from_rgb(235, 103, 110), "FAILED")
+                } else if self.status == "Stopped" {
+                    (egui::Color32::from_rgb(237, 183, 87), "STOPPED")
                 } else {
-                    egui::Color32::GRAY
+                    (egui::Color32::from_rgb(148, 164, 184), "READY")
                 };
-                ui.label(
-                    egui::RichText::new(format!("● {}", self.status.to_uppercase()))
-                        .color(color)
-                        .strong(),
-                );
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(31, 42, 57))
+                    .corner_radius(egui::CornerRadius::same(20))
+                    .inner_margin(egui::Margin::symmetric(11, 5))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("● {status}"))
+                                .size(10.5)
+                                .strong()
+                                .color(color),
+                        );
+                    });
             });
         });
-        ui.add_space(10.0);
-        ui.separator();
     }
 
     fn tester_ui(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.heading(
+            egui::RichText::new("HTTP Benchmark")
+                .size(23.0)
+                .strong()
+                .color(egui::Color32::from_rgb(235, 242, 250)),
+        );
+        ui.label(
+            egui::RichText::new("Configure a request profile and watch the server response in real time.")
+                .color(egui::Color32::from_rgb(143, 160, 181)),
+        );
+        ui.add_space(12.0);
         ui.heading("Test configuration");
         ui.add_space(8.0);
         ui.label("Target URL");
@@ -384,23 +471,26 @@ impl RedPulseApp {
         let rps = self.total_received as f64 / elapsed;
         let (avg, p50, p95, p99) = self.metrics();
 
-        egui::Grid::new("metrics_grid")
-            .num_columns(4)
-            .spacing([10.0, 10.0])
-            .show(ui, |ui| {
-                Self::metric_card(ui, "TOTAL REQUESTS", self.total_received, "");
-                Self::metric_card(ui, "REQUESTS / SEC", format!("{rps:.2}"), "RPS");
-                Self::metric_card(ui, "SUCCESS", self.total_success, "");
-                Self::metric_card(ui, "4xx", self.total_client_errors, "");
-                ui.end_row();
-
-                Self::metric_card(ui, "5xx", self.total_server_errors, "");
-                Self::metric_card(ui, "NETWORK ERRORS", self.total_network_errors, "");
-                Self::metric_card(ui, "AVG LATENCY", format!("{avg:.1}"), "ms");
-                Self::metric_card(ui, "P95 / P99", format!("{p95:.1} / {p99:.1}"), "ms");
-                ui.end_row();
-            });
-        ui.label(format!("P50 latency: {p50:.2} ms"));
+        ui.columns(4, |columns| {
+            Self::metric_card(&mut columns[0], "TOTAL REQUESTS", self.total_received, "");
+            Self::metric_card(&mut columns[1], "OBSERVED THROUGHPUT", format!("{rps:.2}"), "RPS");
+            Self::metric_card(&mut columns[2], "SUCCESSFUL", self.total_success, "");
+            Self::metric_card(&mut columns[3], "CLIENT ERRORS", self.total_client_errors, "");
+        });
+        ui.add_space(8.0);
+        ui.columns(4, |columns| {
+            Self::metric_card(&mut columns[0], "SERVER ERRORS", self.total_server_errors, "");
+            Self::metric_card(&mut columns[1], "NETWORK ERRORS", self.total_network_errors, "");
+            Self::metric_card(&mut columns[2], "AVERAGE LATENCY", format!("{avg:.1}"), "ms");
+            Self::metric_card(&mut columns[3], "P95 / P99", format!("{p95:.1} / {p99:.1}"), "ms");
+        });
+        ui.label(
+            egui::RichText::new(format!(
+                "P50 latency: {p50:.2} ms  ·  Latency includes failed requests and timeouts."
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(135, 153, 176)),
+        );
 
         ui.add_space(12.0);
         ui.heading("Response time");
@@ -425,7 +515,36 @@ impl RedPulseApp {
     }
 
     fn results_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Test results");
+        ui.heading(
+            egui::RichText::new("Test results")
+                .size(23.0)
+                .strong()
+                .color(egui::Color32::from_rgb(235, 242, 250)),
+        );
+        if let Some(run) = &self.last_run {
+            egui::Frame::group(ui.style())
+                .fill(egui::Color32::from_rgb(22, 29, 41))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 61, 81)))
+                .corner_radius(12)
+                .inner_margin(12)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("RUN CONFIGURATION")
+                            .small()
+                            .strong()
+                            .color(egui::Color32::from_rgb(139, 159, 184)),
+                    );
+                    ui.label(
+                        egui::RichText::new(&run.target)
+                            .strong()
+                            .color(egui::Color32::from_rgb(105, 190, 250)),
+                    );
+                    ui.label(format!(
+                        "{} · {} workers · {} s · {} req/s cap · {} s timeout",
+                        run.method, run.workers, run.duration_secs, run.request_rate, run.timeout_secs
+                    ));
+                });
+        }
         ui.horizontal(|ui| {
             if ui.button("Export JSON").clicked() {
                 self.export(false);
@@ -481,11 +600,15 @@ impl RedPulseApp {
                         );
                         ui.label(format!("{:.1} ms", sample.latency_ms));
                         ui.label(sample.bytes.to_string());
-                        ui.label(sample.error.as_deref().unwrap_or(if sample.ok {
-                            "OK"
+                        let details = sample.error.as_deref().unwrap_or(if sample.ok {
+                            "HTTP response received"
                         } else {
-                            "HTTP error"
-                        }));
+                            "HTTP error response"
+                        });
+                        let response = ui.label(details);
+                        if sample.error.is_some() {
+                            response.on_hover_text(details);
+                        }
                         ui.end_row();
                     }
                 });
@@ -493,7 +616,12 @@ impl RedPulseApp {
     }
 
     fn about_ui(&self, ui: &mut egui::Ui) {
-        ui.heading("About RedPulse");
+        ui.heading(
+            egui::RichText::new("About RedPulse")
+                .size(23.0)
+                .strong()
+                .color(egui::Color32::from_rgb(235, 242, 250)),
+        );
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
         ui.label("A native Rust desktop HTTP benchmarking workbench.");
         ui.add_space(8.0);
@@ -514,10 +642,17 @@ impl eframe::App for RedPulseApp {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
-        egui::TopBottomPanel::top("topbar").show(ctx, |ui| self.header(ui));
+        egui::TopBottomPanel::top("topbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(14, 19, 28))
+                    .inner_margin(egui::Margin::symmetric(16, 11)),
+            )
+            .show(ctx, |ui| self.header(ui));
         egui::SidePanel::left("navigation")
             .resizable(false)
-            .default_width(175.0)
+            .default_width(158.0)
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(15, 20, 29)))
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 if ui
@@ -541,7 +676,7 @@ impl eframe::App for RedPulseApp {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.separator();
                     ui.label(
-                        egui::RichText::new("REDPULSE 0.1.0")
+                        egui::RichText::new(concat!("REDPULSE ", env!("CARGO_PKG_VERSION")))
                             .small()
                             .color(egui::Color32::GRAY),
                     );
