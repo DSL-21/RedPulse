@@ -1160,6 +1160,7 @@ impl RedPulseApp {
                     for heading in [
                         "Elapsed",
                         "Status",
+                        "Protocol",
                         "Latency",
                         "Origin IP",
                         "Bytes",
@@ -1188,6 +1189,7 @@ impl RedPulseApp {
                                 sample.status.to_string()
                             },
                         );
+                        ui.label(sample.http_version.as_deref().unwrap_or("—"));
                         ui.label(format!("{:.1} ms", sample.latency_ms));
                         ui.label(sample.endpoint_ip.as_deref().unwrap_or("System DNS"));
                         ui.label(sample.bytes.to_string());
