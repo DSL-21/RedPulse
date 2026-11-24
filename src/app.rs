@@ -488,11 +488,7 @@ impl RedPulseApp {
                         LoadModel::ConstantArrivalRate,
                         "Constant Arrival Rate",
                     );
-                    ui.selectable_value(
-                        &mut self.load_model,
-                        LoadModel::ClosedLoop,
-                        "Closed Loop",
-                    );
+                    ui.selectable_value(&mut self.load_model, LoadModel::ClosedLoop, "Closed Loop");
                 });
             ui.label(
                 egui::RichText::new(self.load_model.description())
@@ -532,8 +528,7 @@ impl RedPulseApp {
             ui.vertical(|ui| {
                 ui.label("Arrival rate");
                 ui.add_enabled(
-                    self.running.is_none()
-                        && self.load_model == LoadModel::ConstantArrivalRate,
+                    self.running.is_none() && self.load_model == LoadModel::ConstantArrivalRate,
                     egui::Slider::new(&mut self.rps, 1..=200).suffix(" req/s"),
                 );
             });
@@ -876,7 +871,9 @@ impl RedPulseApp {
         ui.label("Metrics: response status, throughput and latency percentiles");
         ui.label("Reports: JSON and CSV");
         ui.separator();
-        ui.label("Constant Arrival Rate schedules requests independently from HTTP worker completion.");
+        ui.label(
+            "Constant Arrival Rate schedules requests independently from HTTP worker completion.",
+        );
         ui.label("Closed Loop lets each worker repeat only after its previous request completes.");
         ui.label("A bounded queue reports constant-rate overload as dropped arrivals instead of delaying future slots.");
         ui.label("Redirect following is disabled; each sample measures the configured endpoint response.");
@@ -992,14 +989,16 @@ mod response_class_tests {
     }
 }
 
-
 #[cfg(test)]
 mod load_model_ui_tests {
     use crate::engine::LoadModel;
 
     #[test]
     fn load_models_have_clear_user_facing_names() {
-        assert_eq!(LoadModel::ConstantArrivalRate.label(), "Constant Arrival Rate");
+        assert_eq!(
+            LoadModel::ConstantArrivalRate.label(),
+            "Constant Arrival Rate"
+        );
         assert_eq!(LoadModel::ClosedLoop.label(), "Closed Loop");
     }
 }

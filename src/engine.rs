@@ -373,8 +373,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
 
         match config.load_model {
             LoadModel::ConstantArrivalRate => {
-                let interval =
-                    Duration::from_secs_f64(1.0 / config.max_requests_per_second as f64);
+                let interval = Duration::from_secs_f64(1.0 / config.max_requests_per_second as f64);
                 let queue_capacity = config
                     .workers
                     .saturating_mul(2)
@@ -427,7 +426,8 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 deadline,
                                 Arc::clone(&worker_stop),
                             )
-                            .await else {
+                            .await
+                            else {
                                 break;
                             };
 
@@ -517,7 +517,8 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 deadline,
                                 Arc::clone(&worker_stop),
                             )
-                            .await else {
+                            .await
+                            else {
                                 break;
                             };
 
@@ -652,8 +653,8 @@ mod tests {
 
     #[test]
     fn closed_loop_workers_repeat_after_each_response() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind closed-loop test server");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind closed-loop test server");
         listener
             .set_nonblocking(true)
             .expect("set nonblocking listener");
@@ -703,7 +704,10 @@ mod tests {
         server_stop.store(true, Ordering::Relaxed);
         server.join().expect("closed-loop test server thread");
 
-        assert!(stats.completed > 10, "workers should repeat completed requests");
+        assert!(
+            stats.completed > 10,
+            "workers should repeat completed requests"
+        );
         assert_eq!(stats.scheduled, stats.started);
         assert_eq!(stats.dropped, 0);
         assert_eq!(stats.queued, 0);
