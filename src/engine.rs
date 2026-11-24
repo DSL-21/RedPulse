@@ -83,6 +83,7 @@ pub struct TestConfig {
     pub max_total_requests: u64,
     pub timeout_secs: u64,
     pub body: String,
+    pub backend_id_header: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +105,7 @@ pub struct Sample {
     pub latency_ms: f64,
     pub status: u16,
     pub endpoint_ip: Option<String>,
+    pub backend_id: Option<String>,
     pub bytes: usize,
     pub ok: bool,
     pub error: Option<String>,
@@ -312,6 +314,11 @@ fn validate(config: &TestConfig) -> Result<(), String> {
     if !matches!(config.method.as_str(), "GET" | "POST") {
         return Err("Supported methods are GET and POST.".into());
     }
+    if !config.backend_id_header.trim().is_empty()
+        && reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes()).is_err()
+    {
+        return Err("Backend identity header name is invalid.".into());
+    }
     if config.method == "POST" {
         if config.body.len() > MAX_REQUEST_BODY_BYTES {
             return Err(format!(
@@ -373,12 +380,22 @@ fn describe_reqwest_error(error: &reqwest::Error) -> String {
     }
 }
 
+fn extract_backend_id(headers: &reqwest::header::HeaderMap, header_name: &str) -> Option<String> {
+    let header_name = reqwest::header::HeaderName::from_bytes(header_name.trim().as_bytes()).ok()?;
+    headers.get(header_name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
 async fn execute_request(
     client: &Client,
     method: Method,
     url: &str,
     body: &str,
-) -> (u16, usize, bool, Option<String>) {
+    backend_id_header: &str,
+) -> (u16, usize, bool, Option<String>, Option<String>) {
     let mut request = client.request(method.clone(), url);
     if method == Method::POST {
         request = request
@@ -389,6 +406,7 @@ async fn execute_request(
     match request.send().await {
         Ok(mut response) => {
             let status = response.status().as_u16();
+            let backend_id = extract_backend_id(response.headers(), backend_id_header);
             let mut count = 0usize;
             let mut read_error = None;
 
@@ -411,9 +429,9 @@ async fn execute_request(
             }
 
             let ok = (200..300).contains(&status) && read_error.is_none();
-            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error)
+            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error, backend_id)
         }
-        Err(error) => (0, 0, false, Some(describe_reqwest_error(&error))),
+        Err(error) => (0, 0, false, Some(describe_reqwest_error(&error)), None),
     }
 }
 
@@ -470,6 +488,7 @@ async fn perform_request(
     method: Method,
     url: &str,
     body: &str,
+    backend_id_header: &str,
     endpoint_ip: Option<String>,
     timing: RunTiming,
     stop: Arc<AtomicBool>,
@@ -480,10 +499,10 @@ async fn perform_request(
     let result = tokio::select! {
         _ = wait_for_stop(Arc::clone(&stop)) => None,
         _ = tokio::time::sleep_until(tokio_deadline) => None,
-        response = execute_request(client, method, url, body) => Some(response),
+        response = execute_request(client, method, url, body, backend_id_header) => Some(response),
     };
 
-    result.map(|(status, bytes, ok, error)| {
+    result.map(|(status, bytes, ok, error, backend_id)| {
         let elapsed_us = timing.started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         Sample {
             elapsed_us,
@@ -491,6 +510,7 @@ async fn perform_request(
             latency_ms: request_started.elapsed().as_secs_f64() * 1000.0,
             status,
             endpoint_ip,
+            backend_id,
             bytes,
             ok,
             error,
@@ -573,6 +593,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     let worker_counters = Arc::clone(&counters);
                     let url = config.url.clone();
                     let body = config.body.clone();
+                    let backend_id_header = config.backend_id_header.clone();
                     let method = method.clone();
 
                     tasks.spawn(async move {
@@ -607,6 +628,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 method.clone(),
                                 &url,
                                 &body,
+                                &backend_id_header,
                                 route.ip.map(|ip| ip.to_string()),
                                 RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
@@ -717,6 +739,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     let worker_counters = Arc::clone(&counters);
                     let url = config.url.clone();
                     let body = config.body.clone();
+                    let backend_id_header = config.backend_id_header.clone();
                     let method = method.clone();
 
                     tasks.spawn(async move {
@@ -741,6 +764,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 method.clone(),
                                 &url,
                                 &body,
+                                &backend_id_header,
                                 route.ip.map(|ip| ip.to_string()),
                                 RunTiming { started, deadline },
                                 Arc::clone(&worker_stop),
@@ -803,7 +827,23 @@ mod tests {
             max_total_requests: DEFAULT_MAX_TOTAL_REQUESTS,
             timeout_secs: 5,
             body: String::new(),
+            backend_id_header: "x-backend-id".into(),
         }
+    }
+
+    #[test]
+    fn backend_identity_header_is_case_insensitive_and_trimmed() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-backend-id", reqwest::header::HeaderValue::from_static("  node-a  "));
+        assert_eq!(extract_backend_id(&headers, "X-Backend-ID"), Some("node-a".into()));
+        assert_eq!(extract_backend_id(&headers, ""), None);
+    }
+
+    #[test]
+    fn rejects_invalid_backend_identity_header_name() {
+        let mut cfg = config("https://example.com");
+        cfg.backend_id_header = "bad header".into();
+        assert!(validate(&cfg).is_err());
     }
 
     #[test]
