@@ -638,12 +638,12 @@ impl RedPulseApp {
                     plot_ui.line(
                         Line::new("P50", p50_points)
                             .color(egui::Color32::from_rgb(76, 195, 142))
-                            .width(1.2),
+                            .width(1.2_f32),
                     );
                     plot_ui.line(
                         Line::new("P95", p95_points)
                             .color(egui::Color32::from_rgb(238, 178, 82))
-                            .width(1.2),
+                            .width(1.2_f32),
                     );
                 }
             });
