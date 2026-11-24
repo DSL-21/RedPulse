@@ -104,6 +104,7 @@ pub struct Sample {
     pub elapsed_ms: u64,
     pub latency_ms: f64,
     pub status: u16,
+    pub http_version: Option<String>,
     pub endpoint_ip: Option<String>,
     pub backend_id: Option<String>,
     pub bytes: usize,
@@ -420,7 +421,7 @@ fn extract_backend_id(
 async fn execute_request(
     client: &Client,
     spec: &RequestSpec,
-) -> (u16, usize, bool, Option<String>, Option<String>) {
+) -> (u16, usize, bool, Option<String>, Option<String>, Option<String>) {
     let mut request = client.request(spec.method.clone(), &spec.url);
     if spec.method == Method::POST {
         request = request
@@ -431,6 +432,14 @@ async fn execute_request(
     match request.send().await {
         Ok(mut response) => {
             let status = response.status().as_u16();
+            let http_version = Some(match response.version() {
+                reqwest::Version::HTTP_09 => "HTTP/0.9",
+                reqwest::Version::HTTP_10 => "HTTP/1.0",
+                reqwest::Version::HTTP_11 => "HTTP/1.1",
+                reqwest::Version::HTTP_2 => "HTTP/2",
+                reqwest::Version::HTTP_3 => "HTTP/3",
+                _ => "Unknown",
+            }.to_string());
             let backend_id = extract_backend_id(response.headers(), spec.backend_id_header.as_ref());
             let mut count = 0usize;
             let mut read_error = None;
@@ -454,9 +463,9 @@ async fn execute_request(
             }
 
             let ok = (200..300).contains(&status) && read_error.is_none();
-            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error, backend_id)
+            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error, backend_id, http_version)
         }
-        Err(error) => (0, 0, false, Some(describe_reqwest_error(&error)), None),
+        Err(error) => (0, 0, false, Some(describe_reqwest_error(&error)), None, None),
     }
 }
 
@@ -524,13 +533,14 @@ async fn perform_request(
         response = execute_request(client, spec) => Some(response),
     };
 
-    result.map(|(status, bytes, ok, error, backend_id)| {
+    result.map(|(status, bytes, ok, error, backend_id, http_version)| {
         let elapsed_us = timing.started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         Sample {
             elapsed_us,
             elapsed_ms: elapsed_us / 1000,
             latency_ms: request_started.elapsed().as_secs_f64() * 1000.0,
             status,
+            http_version,
             endpoint_ip,
             backend_id,
             bytes,
@@ -700,6 +710,21 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         );
 
         let counters = Arc::new(Counters::default());
+        let stats_task = {
+            let stats_tx = tx.clone();
+            let stats_counters = Arc::clone(&counters);
+            let stats_stop = Arc::clone(&stop);
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_millis(250));
+                loop {
+                    ticker.tick().await;
+                    emit_stats(&stats_tx, &stats_counters);
+                    if stats_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                        break;
+                    }
+                }
+            })
+        };
         let mut tasks = tokio::task::JoinSet::new();
         let mut scheduler = None;
 
@@ -707,8 +732,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
             LoadModel::ConstantArrivalRate => {
                 let interval = request_interval(config.max_requests_per_second);
                 let queue_capacity = config.workers.saturating_mul(2).max(2);
-                let (job_tx, job_rx) = tokio::sync::mpsc::channel::<()>(queue_capacity);
-                let job_rx = Arc::new(tokio::sync::Mutex::new(job_rx));
+                let (job_tx, job_rx) = async_channel::bounded::<()>(queue_capacity);
 
                 // Fixed-rate arrivals are scheduled independently of worker
                 // completion. The bounded queue makes overload measurable.
@@ -717,22 +741,17 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                     let worker_route_cursor = Arc::clone(&route_cursor);
                     let worker_tx = tx.clone();
                     let worker_stop = Arc::clone(&stop);
-                    let worker_rx = Arc::clone(&job_rx);
+                    let worker_rx = job_rx.clone();
                     let worker_counters = Arc::clone(&counters);
                     let worker_request = request_spec.clone();
 
                     tasks.spawn(async move {
                         loop {
-                            let next_job = async {
-                                let mut receiver = worker_rx.lock().await;
-                                receiver.recv().await
-                            };
-
                             let tokio_deadline = tokio::time::Instant::from_std(deadline);
                             let job = tokio::select! {
                                 _ = wait_for_stop(Arc::clone(&worker_stop)) => None,
                                 _ = tokio::time::sleep_until(tokio_deadline) => None,
-                                job = next_job => job,
+                                job = worker_rx.recv() => job.ok(),
                             };
 
                             if job.is_none()
@@ -743,8 +762,6 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             }
 
                             worker_counters.started.fetch_add(1, Ordering::Relaxed);
-                            emit_stats(&worker_tx, &worker_counters);
-
                             let route_index =
                                 next_route_index(&worker_route_cursor, worker_routes.len());
                             let route = worker_routes[route_index].clone();
@@ -765,14 +782,12 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 worker_stop.store(true, Ordering::Relaxed);
                                 break;
                             }
-                            emit_stats(&worker_tx, &worker_counters);
                         }
                     });
                 }
 
                 let scheduler_stop = Arc::clone(&stop);
                 let scheduler_counters = Arc::clone(&counters);
-                let scheduler_tx = tx.clone();
                 let max_total_requests = config.max_total_requests;
                 scheduler = Some(tokio::spawn(async move {
                     let mut next_slot = started;
@@ -802,7 +817,6 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                     .fetch_add(missed, Ordering::Relaxed);
                             }
                             next_slot += interval * missed.min(u32::MAX as u64) as u32;
-                            emit_stats(&scheduler_tx, &scheduler_counters);
                             if missed < overdue {
                                 scheduler_counters
                                     .limit_reached
@@ -827,13 +841,11 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             scheduler_counters
                                 .limit_reached
                                 .store(true, Ordering::Relaxed);
-                            emit_stats(&scheduler_tx, &scheduler_counters);
                             break;
                         }
                         if job_tx.try_send(()).is_err() {
                             scheduler_counters.dropped.fetch_add(1, Ordering::Relaxed);
                         }
-                        emit_stats(&scheduler_tx, &scheduler_counters);
                         next_slot += interval;
 
                         if scheduler_counters.scheduled.load(Ordering::Relaxed)
@@ -842,7 +854,6 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             scheduler_counters
                                 .limit_reached
                                 .store(true, Ordering::Relaxed);
-                            emit_stats(&scheduler_tx, &scheduler_counters);
                             break;
                         }
                     }
@@ -868,13 +879,10 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             }
                             if !reserve_one(&worker_counters.scheduled, max_total_requests) {
                                 worker_counters.limit_reached.store(true, Ordering::Relaxed);
-                                emit_stats(&worker_tx, &worker_counters);
                                 break;
                             }
 
                             worker_counters.started.fetch_add(1, Ordering::Relaxed);
-                            emit_stats(&worker_tx, &worker_counters);
-
                             let route_index =
                                 next_route_index(&worker_route_cursor, worker_routes.len());
                             let route = worker_routes[route_index].clone();
@@ -895,7 +903,6 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                                 worker_stop.store(true, Ordering::Relaxed);
                                 break;
                             }
-                            emit_stats(&worker_tx, &worker_counters);
                         }
                     });
                 }
@@ -913,6 +920,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         if let Some(monitor) = hardware_monitor {
             let _ = monitor.join();
         }
+        let _ = stats_task.await;
 
         let stats = counters.final_snapshot();
         let _ = tx.send(EngineEvent::Finished {
