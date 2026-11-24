@@ -2,6 +2,19 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.1.1] - 2026-11-24
+
+### Added
+- More compact default desktop window size (1040 × 700 logical pixels).
+- Refined dark color palette, rounded metric cards, status pill and updated dashboard hierarchy.
+- Detailed network error messages with timeout/connection classification and chained causes.
+- Per-run configuration snapshot shown with results.
+- Run profile metadata included in JSON exports.
+
+### Fixed
+- Results no longer display slider values changed after the completed run.
+- JSON export now records the configuration that actually produced its samples.
+
 ## [0.1.0] - 2026-11-24
 
 ### Added
