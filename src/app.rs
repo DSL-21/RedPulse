@@ -259,16 +259,15 @@ impl RedPulseApp {
         let result = if csv {
             report::export_csv(&path, &all_samples)
         } else if let Some(run) = &self.last_run {
-            report::export_json(
-                &path,
-                &run.target,
-                &run.method,
-                run.workers,
-                run.duration_secs,
-                run.request_rate,
-                run.timeout_secs,
-                &all_samples,
-            )
+            let config = report::RunConfig {
+                target: &run.target,
+                method: &run.method,
+                workers: run.workers,
+                duration_secs: run.duration_secs,
+                request_rate: run.request_rate,
+                timeout_secs: run.timeout_secs,
+            };
+            report::export_json(&path, &config, &all_samples)
         } else {
             Err(anyhow::anyhow!("There is no test run to export."))
         };
