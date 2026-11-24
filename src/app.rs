@@ -50,7 +50,7 @@ pub struct RedPulseApp {
 
 impl RedPulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut visuals = egui::Visuals::dark();
+        let visuals = egui::Visuals::dark();
         cc.egui_ctx.set_visuals(visuals);
 
         Self {
