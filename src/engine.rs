@@ -1174,7 +1174,8 @@ mod tests {
                 EngineEvent::OriginsResolved { .. }
                 | EngineEvent::Started { .. }
                 | EngineEvent::Stats(_)
-                | EngineEvent::Sample(_) => {}
+                | EngineEvent::Sample(_)
+                | EngineEvent::Hardware(_) => {}
                 EngineEvent::Finished { stats, .. } => break stats,
                 EngineEvent::Fatal(message) => panic!("closed-loop engine failed: {message}"),
             }
@@ -1229,7 +1230,7 @@ mod tests {
                     max_queued = max_queued.max(snapshot.queued);
                     max_in_flight = max_in_flight.max(snapshot.in_flight);
                 }
-                EngineEvent::Sample(_) => {}
+                EngineEvent::Sample(_) | EngineEvent::Hardware(_) => {}
                 EngineEvent::Finished { stats, .. } => break stats,
                 EngineEvent::Fatal(message) => panic!("engine failed: {message}"),
             }
@@ -1319,7 +1320,8 @@ mod tests {
                 EngineEvent::OriginsResolved { .. }
                 | EngineEvent::Started { .. }
                 | EngineEvent::Stats(_)
-                | EngineEvent::Sample(_) => {}
+                | EngineEvent::Sample(_)
+                | EngineEvent::Hardware(_) => {}
                 EngineEvent::Fatal(message) => panic!("timeout benchmark failed: {message}"),
             }
         }
