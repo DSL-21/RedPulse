@@ -10,8 +10,8 @@ use hdrhistogram::Histogram;
 
 use crate::{
     engine::{
-        self, DEFAULT_MAX_TOTAL_REQUESTS, DnsStrategy, EngineEvent, EngineStats, LoadModel,
-        MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
+        self, DEFAULT_MAX_TOTAL_REQUESTS, DnsStrategy, EngineEvent, EngineStats, HardwareSample,
+        LoadModel, MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
     },
     recon::ReconState,
     report,
@@ -27,6 +27,7 @@ enum Tab {
 
 const MAX_UI_SAMPLES: usize = 10_000;
 const MAX_PLOT_POINTS: usize = 2_000;
+const MAX_HARDWARE_SAMPLES: usize = 1_800;
 
 fn downsample_min_max(points: &VecDeque<(f64, f64)>, max_points: usize) -> Vec<[f64; 2]> {
     let mut sorted: Vec<[f64; 2]> = points.iter().map(|(x, y)| [*x, *y]).collect();
@@ -131,6 +132,7 @@ pub struct RedPulseApp {
     running: Option<TestHandle>,
     samples: VecDeque<Sample>,
     recent_latencies: VecDeque<(f64, f64)>,
+    hardware_samples: VecDeque<HardwareSample>,
     resolved_addresses: Vec<String>,
     origin_request_counts: BTreeMap<String, u64>,
     backend_request_counts: BTreeMap<String, u64>,
@@ -195,6 +197,7 @@ impl RedPulseApp {
             running: None,
             samples: VecDeque::new(),
             recent_latencies: VecDeque::new(),
+            hardware_samples: VecDeque::new(),
             resolved_addresses: Vec::new(),
             origin_request_counts: BTreeMap::new(),
             backend_request_counts: BTreeMap::new(),
@@ -222,6 +225,7 @@ impl RedPulseApp {
     fn reset_results(&mut self) {
         self.samples.clear();
         self.recent_latencies.clear();
+        self.hardware_samples.clear();
         self.resolved_addresses.clear();
         self.origin_request_counts.clear();
         self.backend_request_counts.clear();
@@ -366,6 +370,12 @@ impl RedPulseApp {
                 }
                 EngineEvent::Stats(stats) => self.engine_stats = stats,
                 EngineEvent::Sample(sample) => self.record_sample(sample),
+                EngineEvent::Hardware(sample) => {
+                    if self.hardware_samples.len() == MAX_HARDWARE_SAMPLES {
+                        self.hardware_samples.pop_front();
+                    }
+                    self.hardware_samples.push_back(sample);
+                }
                 EngineEvent::Finished {
                     stopped,
                     elapsed_secs,
@@ -455,6 +465,7 @@ impl RedPulseApp {
                 backend_id_header: &run.backend_id_header,
                 resolved_addresses: &run.resolved_addresses,
                 stats: self.engine_stats,
+                hardware_samples: &self.hardware_samples,
             };
             report::export_json(&path, &config, &all_samples)
         } else {
@@ -824,6 +835,118 @@ impl RedPulseApp {
             .small()
             .color(egui::Color32::from_rgb(156, 177, 201)),
         );
+
+        ui.add_space(10.0);
+        ui.heading("Generator & host telemetry");
+        if let Some(hardware) = self.hardware_samples.back() {
+            let process_memory_mb = hardware
+                .process_memory_bytes
+                .map(|bytes| bytes as f64 / 1_048_576.0);
+            ui.columns(5, |columns| {
+                Self::metric_card(
+                    &mut columns[0],
+                    "HOST CPU",
+                    format!("{:.1}", hardware.system_cpu_percent),
+                    "%",
+                );
+                Self::metric_card(
+                    &mut columns[1],
+                    "REDPULSE CPU",
+                    format!("{:.1}", hardware.process_cpu_percent),
+                    "% / core",
+                );
+                Self::metric_card(
+                    &mut columns[2],
+                    "PROCESS RAM",
+                    process_memory_mb.map(|value| format!("{value:.1}")).unwrap_or_else(|| "N/A".into()),
+                    "MB",
+                );
+                Self::metric_card(
+                    &mut columns[3],
+                    "NETWORK RX",
+                    format!("{:.2}", hardware.network_rx_bytes_per_sec as f64 / 1_048_576.0),
+                    "MB/s",
+                );
+                Self::metric_card(
+                    &mut columns[4],
+                    "NETWORK TX",
+                    format!("{:.2}", hardware.network_tx_bytes_per_sec as f64 / 1_048_576.0),
+                    "MB/s",
+                );
+            });
+            let host_memory_percent = if hardware.system_memory_total_bytes == 0 {
+                0.0
+            } else {
+                hardware.system_memory_used_bytes as f64
+                    / hardware.system_memory_total_bytes as f64
+                    * 100.0
+            };
+            let process_cpu_capacity = (hardware.process_cpu_percent
+                / (hardware.logical_cores.max(1) as f32 * 100.0)
+                * 100.0)
+                .clamp(0.0, 100.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "Logical cores: {} · Host RAM: {:.1}% used · RedPulse CPU capacity: {:.1}% · Host-wide network counters",
+                    hardware.logical_cores,
+                    host_memory_percent,
+                    process_cpu_capacity
+                ))
+                .small()
+                .color(egui::Color32::from_rgb(135, 153, 176)),
+            );
+            if hardware.system_cpu_percent >= 95.0 || process_cpu_capacity >= 85.0 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(238, 178, 82),
+                    "Low CPU headroom detected: the load generator or host may be limiting this run. Treat target-performance results with caution.",
+                );
+            }
+            let cpu_points: PlotPoints = self
+                .hardware_samples
+                .iter()
+                .map(|sample| {
+                    [
+                        sample.elapsed_ms as f64 / 1000.0,
+                        (sample.process_cpu_percent
+                            / (sample.logical_cores.max(1) as f32 * 100.0)
+                            * 100.0) as f64,
+                    ]
+                })
+                .collect();
+            let host_points: PlotPoints = self
+                .hardware_samples
+                .iter()
+                .map(|sample| {
+                    [
+                        sample.elapsed_ms as f64 / 1000.0,
+                        sample.system_cpu_percent as f64,
+                    ]
+                })
+                .collect();
+            Plot::new("hardware_cpu_plot")
+                .height(135.0)
+                .allow_zoom(false)
+                .allow_scroll(false)
+                .allow_drag(false)
+                .allow_boxed_zoom(false)
+                .allow_double_click_reset(false)
+                .x_axis_label("Elapsed time (s)")
+                .y_axis_label("CPU utilization (%)")
+                .include_y(0.0)
+                .include_y(100.0)
+                .show(ui, |plot_ui| {
+                    plot_ui.line(
+                        Line::new("RedPulse process capacity", cpu_points)
+                            .width(1.8),
+                    );
+                    plot_ui.line(
+                        Line::new("Whole host", host_points)
+                            .width(1.4),
+                    );
+                });
+        } else {
+            ui.label("Hardware telemetry is sampled once per second while a test is running.");
+        }
         if self.dns_strategy == DnsStrategy::RoundRobin {
             ui.add_space(8.0);
             ui.heading("DNS origin distribution");
@@ -1093,8 +1216,8 @@ impl RedPulseApp {
         ui.label("Recon: bounded HTTP surface inspection, header and cookie posture checks");
         ui.label("Load testing: Constant Arrival Rate and Closed Loop");
         ui.label("DNS routing: system resolver or round-robin across resolved IP addresses");
-        ui.label("Metrics: response status, throughput and latency percentiles");
-        ui.label("Reports: JSON and CSV for benchmark runs");
+        ui.label("Metrics: response status, throughput, latency percentiles and generator/host hardware telemetry");
+        ui.label("Reports: JSON and CSV for benchmark runs; JSON retains hardware samples");
         ui.label("Recon profile: six sequential HTTP probes, no redirects, five-second timeout");
         ui.separator();
         ui.label(
