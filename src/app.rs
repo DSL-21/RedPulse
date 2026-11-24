@@ -9,7 +9,7 @@ use egui_plot::{Line, Plot, PlotPoints};
 use hdrhistogram::Histogram;
 
 use crate::{
-    engine::{self, EngineEvent, Sample, TestConfig, TestHandle},
+    engine::{self, EngineEvent, EngineStats, Sample, TestConfig, TestHandle},
     report,
 };
 
@@ -21,6 +21,27 @@ enum Tab {
 }
 
 const MAX_UI_SAMPLES: usize = 20_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponseClass {
+    NetworkError,
+    Success,
+    Redirect,
+    ClientError,
+    ServerError,
+    Other,
+}
+
+fn classify_status(status: u16) -> ResponseClass {
+    match status / 100 {
+        0 => ResponseClass::NetworkError,
+        2 => ResponseClass::Success,
+        3 => ResponseClass::Redirect,
+        4 => ResponseClass::ClientError,
+        5 => ResponseClass::ServerError,
+        _ => ResponseClass::Other,
+    }
+}
 
 #[derive(Clone)]
 struct RunSnapshot {
@@ -52,9 +73,11 @@ pub struct RedPulseApp {
     last_export: Option<String>,
     total_received: u64,
     total_success: u64,
-    total_client_errors: u64,
-    total_server_errors: u64,
+    total_redirects: u64,
+    total_http_4xx: u64,
+    total_http_5xx: u64,
     total_network_errors: u64,
+    engine_stats: EngineStats,
     http_response_count: u64,
     latency_sum_ms: f64,
     latency_min_ms: Option<f64>,
@@ -106,9 +129,11 @@ impl RedPulseApp {
             last_export: None,
             total_received: 0,
             total_success: 0,
-            total_client_errors: 0,
-            total_server_errors: 0,
+            total_redirects: 0,
+            total_http_4xx: 0,
+            total_http_5xx: 0,
             total_network_errors: 0,
+            engine_stats: EngineStats::default(),
             http_response_count: 0,
             latency_sum_ms: 0.0,
             latency_min_ms: None,
@@ -123,9 +148,11 @@ impl RedPulseApp {
         self.recent_latencies.clear();
         self.total_received = 0;
         self.total_success = 0;
-        self.total_client_errors = 0;
-        self.total_server_errors = 0;
+        self.total_redirects = 0;
+        self.total_http_4xx = 0;
+        self.total_http_5xx = 0;
         self.total_network_errors = 0;
+        self.engine_stats = EngineStats::default();
         self.http_response_count = 0;
         self.latency_sum_ms = 0.0;
         self.latency_min_ms = None;
@@ -180,14 +207,13 @@ impl RedPulseApp {
 
     fn record_sample(&mut self, sample: Sample) {
         self.total_received += 1;
-        if sample.status >= 200 && sample.status < 400 {
-            self.total_success += 1;
-        } else if sample.status >= 400 && sample.status < 500 {
-            self.total_client_errors += 1;
-        } else if sample.status >= 500 {
-            self.total_server_errors += 1;
-        } else if sample.status == 0 {
-            self.total_network_errors += 1;
+        match classify_status(sample.status) {
+            ResponseClass::Success => self.total_success += 1,
+            ResponseClass::Redirect => self.total_redirects += 1,
+            ResponseClass::ClientError => self.total_http_4xx += 1,
+            ResponseClass::ServerError => self.total_http_5xx += 1,
+            ResponseClass::NetworkError => self.total_network_errors += 1,
+            ResponseClass::Other => {}
         }
 
         // Response-time statistics describe actual HTTP responses only.
@@ -237,11 +263,14 @@ impl RedPulseApp {
                     self.started = Some(at);
                     self.status = "Running".into();
                 }
+                EngineEvent::Stats(stats) => self.engine_stats = stats,
                 EngineEvent::Sample(sample) => self.record_sample(sample),
                 EngineEvent::Finished {
                     stopped,
                     elapsed_secs,
+                    stats,
                 } => {
+                    self.engine_stats = stats;
                     self.elapsed_seconds = elapsed_secs;
                     if let Some(run) = self.last_run.as_mut() {
                         run.actual_elapsed_secs = elapsed_secs;
@@ -319,6 +348,7 @@ impl RedPulseApp {
                 request_rate: run.request_rate,
                 timeout_secs: run.timeout_secs,
                 actual_elapsed_secs: run.actual_elapsed_secs,
+                stats: self.engine_stats,
             };
             report::export_json(&path, &config, &all_samples)
         } else {
@@ -534,47 +564,22 @@ impl RedPulseApp {
         let (avg, min, p50, p95, p99, max) = self.metrics();
 
         ui.columns(4, |columns| {
-            Self::metric_card(&mut columns[0], "TOTAL REQUESTS", self.total_received, "");
+            Self::metric_card(&mut columns[0], "COMPLETED REQUESTS", self.total_received, "");
             Self::metric_card(
                 &mut columns[1],
                 "OBSERVED THROUGHPUT",
                 format!("{rps:.2}"),
                 "RPS",
             );
-            Self::metric_card(&mut columns[2], "SUCCESSFUL", self.total_success, "");
-            Self::metric_card(
-                &mut columns[3],
-                "CLIENT ERRORS",
-                self.total_client_errors,
-                "",
-            );
+            Self::metric_card(&mut columns[2], "HTTP 2xx", self.total_success, "");
+            Self::metric_card(&mut columns[3], "HTTP 4xx", self.total_http_4xx, "");
         });
         ui.add_space(8.0);
         ui.columns(4, |columns| {
-            Self::metric_card(
-                &mut columns[0],
-                "SERVER ERRORS",
-                self.total_server_errors,
-                "",
-            );
-            Self::metric_card(
-                &mut columns[1],
-                "NETWORK ERRORS",
-                self.total_network_errors,
-                "",
-            );
-            Self::metric_card(
-                &mut columns[2],
-                "AVERAGE LATENCY",
-                format!("{avg:.1}"),
-                "ms",
-            );
-            Self::metric_card(
-                &mut columns[3],
-                "P95 / P99",
-                format!("{p95:.1} / {p99:.1}"),
-                "ms",
-            );
+            Self::metric_card(&mut columns[0], "HTTP 5xx", self.total_http_5xx, "");
+            Self::metric_card(&mut columns[1], "HTTP 3xx", self.total_redirects, "");
+            Self::metric_card(&mut columns[2], "NETWORK ERRORS", self.total_network_errors, "");
+            Self::metric_card(&mut columns[3], "AVERAGE LATENCY", format!("{avg:.1}"), "ms");
         });
         ui.label(
             egui::RichText::new(format!(
@@ -589,6 +594,20 @@ impl RedPulseApp {
                 .color(egui::Color32::from_rgb(135, 153, 176)),
         );
 
+        ui.label(
+            egui::RichText::new(format!(
+                "Requests: scheduled {} · started {} · completed {} · queued {} · in-flight {} · cancelled {} · dropped {}",
+                self.engine_stats.scheduled,
+                self.engine_stats.started,
+                self.engine_stats.completed,
+                self.engine_stats.queued,
+                self.engine_stats.in_flight,
+                self.engine_stats.cancelled,
+                self.engine_stats.dropped
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(156, 177, 201)),
+        );
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.heading("Response time");
@@ -706,13 +725,24 @@ impl RedPulseApp {
         ui.add_space(8.0);
         let (avg, min, p50, p95, p99, max) = self.metrics();
         ui.label(format!(
-            "{} requests · {} HTTP responses · {} successful · {} client errors · {} server errors · {} network errors",
+            "{} completed requests · {} HTTP responses · {} HTTP 2xx · {} HTTP 3xx · {} HTTP 4xx · {} HTTP 5xx · {} network errors",
             self.total_received,
             self.http_response_count,
             self.total_success,
-            self.total_client_errors,
-            self.total_server_errors,
+            self.total_redirects,
+            self.total_http_4xx,
+            self.total_http_5xx,
             self.total_network_errors
+        ));
+        ui.label(format!(
+            "Scheduled {} · Started {} · Completed {} · Queued {} · In-flight {} · Cancelled {} · Dropped {}",
+            self.engine_stats.scheduled,
+            self.engine_stats.started,
+            self.engine_stats.completed,
+            self.engine_stats.queued,
+            self.engine_stats.in_flight,
+            self.engine_stats.cancelled,
+            self.engine_stats.dropped
         ));
         ui.label(format!(
             "Min {min:.2} ms · Average {avg:.2} ms · P50 {p50:.2} ms · P95 {p95:.2} ms · P99 {p99:.2} ms · Max {max:.2} ms"
@@ -735,12 +765,12 @@ impl RedPulseApp {
 
                     for sample in self.samples.iter().rev().take(500) {
                         ui.label(format!("{:.2}s", sample.elapsed_ms as f64 / 1000.0));
-                        let color = if sample.status >= 500 || sample.status == 0 {
-                            egui::Color32::LIGHT_RED
-                        } else if sample.status >= 400 {
-                            egui::Color32::YELLOW
-                        } else {
-                            egui::Color32::LIGHT_GREEN
+                        let color = match classify_status(sample.status) {
+                            ResponseClass::NetworkError | ResponseClass::ServerError => egui::Color32::LIGHT_RED,
+                            ResponseClass::ClientError => egui::Color32::YELLOW,
+                            ResponseClass::Redirect => egui::Color32::from_rgb(105, 174, 238),
+                            ResponseClass::Success => egui::Color32::LIGHT_GREEN,
+                            ResponseClass::Other => egui::Color32::GRAY,
                         };
                         ui.colored_label(
                             color,
@@ -782,7 +812,8 @@ impl RedPulseApp {
         ui.label("Metrics: response status, throughput and latency percentiles");
         ui.label("Reports: JSON and CSV");
         ui.separator();
-        ui.label("The configured request-rate ceiling is global across all workers.");
+        ui.label("The arrival scheduler runs independently from the HTTP workers.");
+        ui.label("A bounded queue reports overload as dropped arrivals instead of delaying future slots.");
         ui.label("Redirect following is disabled; each sample measures the configured endpoint response.");
     }
 }
@@ -861,5 +892,38 @@ mod tests {
         assert_eq!(RedPulseApp::calculate_rps(10, -1.0), 0.0);
         assert_eq!(RedPulseApp::calculate_rps(10, f64::NAN), 0.0);
         assert_eq!(RedPulseApp::calculate_rps(10, f64::INFINITY), 0.0);
+    }
+}
+
+
+#[cfg(test)]
+mod response_class_tests {
+    use super::{ResponseClass, classify_status};
+
+    #[test]
+    fn classifies_http_success_responses() {
+        assert_eq!(classify_status(200), ResponseClass::Success);
+        assert_eq!(classify_status(204), ResponseClass::Success);
+    }
+
+    #[test]
+    fn classifies_redirect_responses_separately() {
+        assert_eq!(classify_status(301), ResponseClass::Redirect);
+        assert_eq!(classify_status(302), ResponseClass::Redirect);
+        assert_eq!(classify_status(304), ResponseClass::Redirect);
+    }
+
+    #[test]
+    fn classifies_client_and_server_errors() {
+        assert_eq!(classify_status(405), ResponseClass::ClientError);
+        assert_eq!(classify_status(429), ResponseClass::ClientError);
+        assert_eq!(classify_status(500), ResponseClass::ServerError);
+        assert_eq!(classify_status(503), ResponseClass::ServerError);
+    }
+
+    #[test]
+    fn classifies_transport_errors_and_unusual_statuses() {
+        assert_eq!(classify_status(0), ResponseClass::NetworkError);
+        assert_eq!(classify_status(101), ResponseClass::Other);
     }
 }
