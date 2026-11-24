@@ -5,6 +5,13 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/release.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/config.toml"
+      - "src/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "RELEASE_NOTES.md"
   workflow_dispatch:
     inputs:
       version:
