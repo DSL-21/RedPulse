@@ -30,6 +30,7 @@ struct RunSnapshot {
     duration_secs: u64,
     request_rate: u32,
     timeout_secs: u64,
+    actual_elapsed_secs: f64,
 }
 
 pub struct RedPulseApp {
@@ -54,9 +55,13 @@ pub struct RedPulseApp {
     total_client_errors: u64,
     total_server_errors: u64,
     total_network_errors: u64,
+    http_response_count: u64,
     latency_sum_ms: f64,
+    latency_min_ms: Option<f64>,
+    latency_max_ms: Option<f64>,
     histogram: Histogram<u64>,
     last_run: Option<RunSnapshot>,
+    plot_view_revision: u64,
 }
 
 impl RedPulseApp {
@@ -105,9 +110,13 @@ impl RedPulseApp {
             total_client_errors: 0,
             total_server_errors: 0,
             total_network_errors: 0,
+            http_response_count: 0,
             latency_sum_ms: 0.0,
+            latency_min_ms: None,
+            latency_max_ms: None,
             histogram: Histogram::<u64>::new(3).expect("valid histogram configuration"),
             last_run: None,
+            plot_view_revision: 0,
         }
     }
 
@@ -119,10 +128,14 @@ impl RedPulseApp {
         self.total_client_errors = 0;
         self.total_server_errors = 0;
         self.total_network_errors = 0;
+        self.http_response_count = 0;
         self.latency_sum_ms = 0.0;
+        self.latency_min_ms = None;
+        self.latency_max_ms = None;
         self.histogram.reset();
         self.elapsed_seconds = 0.0;
         self.last_run = None;
+        self.plot_view_revision = self.plot_view_revision.wrapping_add(1);
     }
 
     fn start_test(&mut self) {
@@ -147,14 +160,15 @@ impl RedPulseApp {
             duration_secs: config.duration_secs,
             request_rate: config.max_requests_per_second,
             timeout_secs: config.timeout_secs,
+            actual_elapsed_secs: 0.0,
         };
 
         match engine::start(config) {
             Ok(handle) => {
                 self.last_run = Some(snapshot);
                 self.running = Some(handle);
-                self.started = Some(Instant::now());
-                self.status = "Running".into();
+                self.started = None;
+                self.status = "Starting".into();
             }
             Err(error) => self.error = Some(error),
         }
@@ -179,14 +193,29 @@ impl RedPulseApp {
             self.total_network_errors += 1;
         }
 
-        self.latency_sum_ms += sample.latency_ms;
-        let micros = (sample.latency_ms * 1000.0).max(1.0) as u64;
-        let _ = self.histogram.record(micros.min(60_000_000));
+        // Response-time statistics describe actual HTTP responses only.
+        // Transport failures (status 0), including timeouts, are counted
+        // separately and do not distort HTTP latency percentiles.
+        if sample.status != 0 && sample.latency_ms.is_finite() && sample.latency_ms >= 0.0 {
+            self.http_response_count += 1;
+            self.latency_sum_ms += sample.latency_ms;
+            self.latency_min_ms = Some(
+                self.latency_min_ms
+                    .map_or(sample.latency_ms, |current| current.min(sample.latency_ms)),
+            );
+            self.latency_max_ms = Some(
+                self.latency_max_ms
+                    .map_or(sample.latency_ms, |current| current.max(sample.latency_ms)),
+            );
 
-        self.recent_latencies
-            .push_back((sample.elapsed_ms as f64 / 1000.0, sample.latency_ms));
-        while self.recent_latencies.len() > 600 {
-            self.recent_latencies.pop_front();
+            let micros = (sample.latency_ms * 1000.0).max(1.0) as u64;
+            let _ = self.histogram.record(micros.min(60_000_000));
+
+            self.recent_latencies
+                .push_back((sample.elapsed_ms as f64 / 1000.0, sample.latency_ms));
+            while self.recent_latencies.len() > 600 {
+                self.recent_latencies.pop_front();
+            }
         }
 
         if self.samples.len() == MAX_UI_SAMPLES {
@@ -207,9 +236,20 @@ impl RedPulseApp {
         let mut finished = false;
         for event in events {
             match event {
-                EngineEvent::Started => self.status = "Running".into(),
+                EngineEvent::Started { at } => {
+                    self.started = Some(at);
+                    self.status = "Running".into();
+                }
                 EngineEvent::Sample(sample) => self.record_sample(sample),
-                EngineEvent::Finished { stopped } => {
+                EngineEvent::Finished {
+                    stopped,
+                    elapsed_secs,
+                } => {
+                    self.elapsed_seconds = elapsed_secs;
+                    if let Some(run) = self.last_run.as_mut() {
+                        run.actual_elapsed_secs = elapsed_secs;
+                    }
+                    self.started = None;
                     self.status = if stopped {
                         "Stopped".into()
                     } else {
@@ -237,16 +277,27 @@ impl RedPulseApp {
         }
     }
 
-    fn metrics(&self) -> (f64, f64, f64, f64) {
-        if self.total_received == 0 {
-            return (0.0, 0.0, 0.0, 0.0);
+    fn metrics(&self) -> (f64, f64, f64, f64, f64, f64) {
+        if self.http_response_count == 0 {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         }
+
         (
-            self.latency_sum_ms / self.total_received as f64,
+            self.latency_sum_ms / self.http_response_count as f64,
+            self.latency_min_ms.unwrap_or(0.0),
             self.histogram.value_at_quantile(0.50) as f64 / 1000.0,
             self.histogram.value_at_quantile(0.95) as f64 / 1000.0,
             self.histogram.value_at_quantile(0.99) as f64 / 1000.0,
+            self.latency_max_ms.unwrap_or(0.0),
         )
+    }
+
+    fn observed_rps(&self) -> f64 {
+        if self.elapsed_seconds <= 0.0 {
+            0.0
+        } else {
+            self.total_received as f64 / self.elapsed_seconds
+        }
     }
 
     fn export(&mut self, csv: bool) {
@@ -266,6 +317,7 @@ impl RedPulseApp {
                 duration_secs: run.duration_secs,
                 request_rate: run.request_rate,
                 timeout_secs: run.timeout_secs,
+                actual_elapsed_secs: run.actual_elapsed_secs,
             };
             report::export_json(&path, &config, &all_samples)
         } else {
@@ -475,9 +527,8 @@ impl RedPulseApp {
         ui.add_space(14.0);
         ui.separator();
         ui.heading("Live metrics");
-        let elapsed = self.elapsed_seconds.max(0.001);
-        let rps = self.total_received as f64 / elapsed;
-        let (avg, p50, p95, p99) = self.metrics();
+        let rps = self.observed_rps();
+        let (avg, min, p50, p95, p99, max) = self.metrics();
 
         ui.columns(4, |columns| {
             Self::metric_card(&mut columns[0], "TOTAL REQUESTS", self.total_received, "");
@@ -524,30 +575,78 @@ impl RedPulseApp {
         });
         ui.label(
             egui::RichText::new(format!(
-                "P50 latency: {p50:.2} ms  ·  Latency includes failed requests and timeouts."
+                "HTTP latency: min {min:.1} · P50 {p50:.1} · avg {avg:.1} · P95 {p95:.1} · P99 {p99:.1} · max {max:.1} ms"
             ))
             .small()
             .color(egui::Color32::from_rgb(135, 153, 176)),
         );
+        ui.label(
+            egui::RichText::new("HTTP latency excludes transport errors and timeouts; HTTP 4xx/5xx responses remain included.")
+                .small()
+                .color(egui::Color32::from_rgb(135, 153, 176)),
+        );
 
         ui.add_space(12.0);
-        ui.heading("Response time");
+        ui.horizontal(|ui| {
+            ui.heading("Response time");
+            if ui.button("↺  Reset view").clicked() {
+                self.plot_view_revision = self.plot_view_revision.wrapping_add(1);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} samples", self.recent_latencies.len()))
+                        .small()
+                        .color(egui::Color32::from_rgb(135, 153, 176)),
+                );
+            });
+        });
+
         let points: PlotPoints = self
             .recent_latencies
             .iter()
             .map(|(x, y)| [*x, *y])
             .collect();
-
-        Plot::new("latency_plot")
-            .height(190.0)
-            .allow_zoom(true)
-            .allow_drag(true)
-            .show(ui, |plot_ui| {
-                plot_ui.line(Line::new("Latency (ms)", points));
+        if points.is_empty() {
+            ui.label("Waiting for HTTP response samples…");
+        } else {
+            let plot = Plot::new(("latency_plot", self.plot_view_revision))
+                .height(205.0)
+                .allow_zoom(true)
+                .allow_drag(true)
+                .allow_boxed_zoom(true)
+                .allow_double_click_reset(true)
+                .x_axis_label("Elapsed time (s)")
+                .y_axis_label("Response latency (ms)")
+                .include_x(0.0)
+                .include_y(0.0);
+            plot.show(ui, |plot_ui| {
+                plot_ui.line(
+                    Line::new("Response latency", points)
+                        .color(egui::Color32::from_rgb(83, 183, 246))
+                        .width(2.0),
+                );
+                if self.http_response_count > 0 {
+                    let x_end = self.elapsed_seconds.max(0.01);
+                    let p50_points: PlotPoints =
+                        vec![[0.0, p50], [x_end, p50]].into();
+                    let p95_points: PlotPoints =
+                        vec![[0.0, p95], [x_end, p95]].into();
+                    plot_ui.line(
+                        Line::new("P50", p50_points)
+                            .color(egui::Color32::from_rgb(76, 195, 142))
+                            .width(1.2),
+                    );
+                    plot_ui.line(
+                        Line::new("P95", p95_points)
+                            .color(egui::Color32::from_rgb(238, 178, 82))
+                            .width(1.2),
+                    );
+                }
             });
+        }
 
         ui.horizontal(|ui| {
-            ui.label(format!("Elapsed: {:.1}s", self.elapsed_seconds));
+            ui.label(format!("Engine elapsed: {:.3}s", self.elapsed_seconds));
             ui.label(format!("Retained samples: {}", self.samples.len()));
         });
     }
@@ -581,12 +680,13 @@ impl RedPulseApp {
                             .color(egui::Color32::from_rgb(105, 190, 250)),
                     );
                     ui.label(format!(
-                        "{} · {} workers · {} s · {} req/s cap · {} s timeout",
+                        "{} · {} workers · {} s configured · {} req/s cap · {} s timeout · {:.3} s measured",
                         run.method,
                         run.workers,
                         run.duration_secs,
                         run.request_rate,
-                        run.timeout_secs
+                        run.timeout_secs,
+                        run.actual_elapsed_secs
                     ));
                 });
         }
@@ -603,18 +703,20 @@ impl RedPulseApp {
         });
 
         ui.add_space(8.0);
-        let (avg, p50, p95, p99) = self.metrics();
+        let (avg, min, p50, p95, p99, max) = self.metrics();
         ui.label(format!(
-            "{} requests · {} successful · {} client errors · {} server errors · {} network errors",
+            "{} requests · {} HTTP responses · {} successful · {} client errors · {} server errors · {} network errors",
             self.total_received,
+            self.http_response_count,
             self.total_success,
             self.total_client_errors,
             self.total_server_errors,
             self.total_network_errors
         ));
         ui.label(format!(
-            "Average {avg:.2} ms · P50 {p50:.2} ms · P95 {p95:.2} ms · P99 {p99:.2} ms"
+            "Min {min:.2} ms · Average {avg:.2} ms · P50 {p50:.2} ms · P95 {p95:.2} ms · P99 {p99:.2} ms · Max {max:.2} ms"
         ));
+        ui.label(format!("Observed throughput: {:.2} RPS over {:.3} seconds", self.observed_rps(), self.elapsed_seconds));
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
