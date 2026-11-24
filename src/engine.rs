@@ -624,7 +624,12 @@ fn spawn_hardware_monitor(
                 let sample = HardwareSample {
                     elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
                     logical_cores,
-                    system_cpu_percent: system.global_cpu_usage(),
+                    system_cpu_percent: system
+                        .cpus()
+                        .iter()
+                        .map(|cpu| cpu.usage())
+                        .sum::<f32>()
+                        / logical_cores as f32,
                     process_cpu_percent: process.map(|process| process.cpu_usage()).unwrap_or(0.0),
                     system_memory_used_bytes: system.used_memory(),
                     system_memory_total_bytes: system.total_memory(),
