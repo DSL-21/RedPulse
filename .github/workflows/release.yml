@@ -22,6 +22,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: redpulse-public-release
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: windows-latest
