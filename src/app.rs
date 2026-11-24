@@ -61,7 +61,6 @@ pub struct RedPulseApp {
     latency_max_ms: Option<f64>,
     histogram: Histogram<u64>,
     last_run: Option<RunSnapshot>,
-    plot_view_revision: u64,
 }
 
 impl RedPulseApp {
@@ -116,7 +115,6 @@ impl RedPulseApp {
             latency_max_ms: None,
             histogram: Histogram::<u64>::new(3).expect("valid histogram configuration"),
             last_run: None,
-            plot_view_revision: 0,
         }
     }
 
@@ -135,7 +133,6 @@ impl RedPulseApp {
         self.histogram.reset();
         self.elapsed_seconds = 0.0;
         self.last_run = None;
-        self.plot_view_revision = self.plot_view_revision.wrapping_add(1);
     }
 
     fn start_test(&mut self) {
@@ -595,9 +592,6 @@ impl RedPulseApp {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.heading("Response time");
-            if ui.button("↺  Reset view").clicked() {
-                self.plot_view_revision = self.plot_view_revision.wrapping_add(1);
-            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(format!("{} samples", self.recent_latencies.len()))
@@ -615,12 +609,15 @@ impl RedPulseApp {
         if self.recent_latencies.is_empty() {
             ui.label("Waiting for HTTP response samples…");
         } else {
-            let plot = Plot::new(("latency_plot", self.plot_view_revision))
+            let plot = Plot::new("latency_plot")
                 .height(205.0)
-                .allow_zoom(true)
-                .allow_drag(true)
-                .allow_boxed_zoom(true)
-                .allow_double_click_reset(true)
+                // Keep the chart fixed: mouse wheel and pointer gestures must
+                // scroll the surrounding dashboard, never alter plot bounds.
+                .allow_zoom(false)
+                .allow_scroll(false)
+                .allow_drag(false)
+                .allow_boxed_zoom(false)
+                .allow_double_click_reset(false)
                 .x_axis_label("Elapsed time (s)")
                 .y_axis_label("Response latency (ms)")
                 .include_x(0.0)

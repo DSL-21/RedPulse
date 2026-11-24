@@ -2,6 +2,14 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.1.3] - 2026-11-24
+
+### Changed
+- Made the response-time chart non-interactive.
+- Disabled mouse-wheel zoom/scroll, pointer dragging, boxed zoom and double-click reset.
+- Removed the Reset View button and its state; the chart keeps its normal automatic data bounds.
+- Mouse-wheel input over the chart now remains available to the surrounding dashboard scroll area.
+
 ## [0.1.2] - 2026-11-24
 
 ### Added
