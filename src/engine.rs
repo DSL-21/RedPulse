@@ -319,6 +319,56 @@ mod tests {
     fn rejects_excessive_request_rate() {
         let mut cfg = config("https://example.com");
         cfg.max_requests_per_second = MAX_RPS + 1;
-        assert!(start(cfg).is_err());
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn sends_http_request_and_stops_cleanly() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test server");
+        let address = listener.local_addr().expect("local server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                )
+                .expect("write response");
+            stream.flush().expect("flush response");
+        });
+
+        let mut cfg = config(&format!("http://{address}/"));
+        cfg.workers = 1;
+        cfg.duration_secs = 5;
+        cfg.max_requests_per_second = 2;
+        let mut handle = start(cfg).expect("start local benchmark");
+
+        let mut received_sample = false;
+        loop {
+            match handle
+                .rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("receive engine event")
+            {
+                EngineEvent::Started => {}
+                EngineEvent::Sample(sample) => {
+                    assert_eq!(sample.status, 200);
+                    assert_eq!(sample.bytes, 2);
+                    assert!(sample.ok);
+                    received_sample = true;
+                    handle.stop();
+                }
+                EngineEvent::Finished { .. } => break,
+                EngineEvent::Fatal(message) => panic!("engine failed: {message}"),
+            }
+        }
+
+        handle.join();
+        server.join().expect("local test server thread");
+        assert!(received_sample, "engine should emit at least one HTTP sample");
     }
 }
