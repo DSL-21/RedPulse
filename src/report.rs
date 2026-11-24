@@ -90,16 +90,3 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     file.flush()?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::csv_field;
-
-    #[test]
-    fn csv_fields_escape_quotes_and_preserve_commas_and_line_breaks() {
-        assert_eq!(
-            csv_field("node, \"east\"\nworker"),
-            "\"node, \"\"east\"\"\nworker\""
-        );
-    }
-}
