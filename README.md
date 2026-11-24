@@ -1,6 +1,6 @@
 # RedPulse
 
-**RedPulse** is a native Windows HTTP benchmarking desktop application written in Rust.
+**RedPulse** is a native Windows red-team web assessment and HTTP benchmarking workbench written in Rust.
 
 It provides a compact GUI for controlled HTTP GET/POST benchmark runs, live throughput and latency metrics, request-level results, and JSON/CSV exports.
 
@@ -17,6 +17,11 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 ## Features
 
 - Native Windows desktop interface using egui / eframe
+- Web Recon module with DNS resolution, HTTP fingerprinting and bounded surface probes
+- Security posture checks for HSTS, CSP, framing, MIME sniffing, cookies and CORS
+- Safe OPTIONS-based HTTP method inspection
+- Public security.txt, robots.txt and sitemap presence checks
+- Evidence-backed findings with severity and remediation guidance
 - HTTP GET and POST requests
 - Configurable load model, worker count, run duration, arrival rate and timeout
 - Constant Arrival Rate mode for fixed-time request arrivals
@@ -49,6 +54,23 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 7. Use the Results tab to export JSON or CSV.
 
 The initial defaults are 5 workers, 30 seconds, 5 requests per second and a 10-second timeout.
+
+## Web Recon
+
+The Recon tab performs a fixed, sequential set of six HTTP probes against the supplied origin:
+
+1. GET the specified target URL (reads at most 128 KiB for technology hints).
+2. HEAD the target URL.
+3. OPTIONS the target URL; advertised methods are inspected but not invoked.
+4. GET `/.well-known/security.txt`.
+5. GET `/robots.txt`.
+6. GET `/sitemap.xml`.
+
+Each probe has a five-second timeout and the sequence spaces requests by 250 ms. Redirects are not followed. The assessment stops early if the service returns HTTP 429 or 503. DNS resolution is performed separately and does not create additional HTTP probes.
+
+The audit reports observable security posture signals including HSTS, CSP, framing protection, MIME sniffing protection, Referrer-Policy, Permissions-Policy, cookie attributes, wildcard CORS with credentials, advertised HTTP methods and technology disclosure headers. Findings include evidence and a remediation suggestion. Fingerprints and missing-header observations are leads for manual verification, not proof of exploitable vulnerabilities.
+
+This first Recon profile deliberately does not perform credential guessing, exploit payload submission, destructive HTTP methods, recursive wordlist discovery or high-volume traffic generation. The existing Load Testing tab remains a separate, bounded feature.
 
 ## Load models
 
@@ -119,7 +141,7 @@ Reports are written to the application's current working directory using the nam
 
 ## Project status
 
-RedPulse 0.1.6 is the seventh public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are planned for later versions.
+RedPulse 0.2.0 is the seventh public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are planned for later versions.
 
 ## License
 

@@ -9,6 +9,7 @@ use egui_plot::{Line, Plot, PlotPoints};
 use hdrhistogram::Histogram;
 
 use crate::{
+    recon::ReconState,
     engine::{
         self, EngineEvent, EngineStats, LoadModel, MAX_REQUEST_BODY_BYTES, MAX_RPS,
         MAX_TOTAL_REQUESTS, Sample, TestConfig, TestHandle,
@@ -18,6 +19,7 @@ use crate::{
 
 #[derive(PartialEq, Eq)]
 enum Tab {
+    Recon,
     Tester,
     Results,
     About,
@@ -110,6 +112,7 @@ struct RunSnapshot {
 
 pub struct RedPulseApp {
     tab: Tab,
+    recon: ReconState,
     target: String,
     method: String,
     load_model: LoadModel,
@@ -166,7 +169,8 @@ impl RedPulseApp {
         });
 
         Self {
-            tab: Tab::Tester,
+            tab: Tab::Recon,
+            recon: ReconState::new(),
             target: "https://example.com/".into(),
             method: "GET".into(),
             load_model: LoadModel::ConstantArrivalRate,
@@ -469,7 +473,7 @@ impl RedPulseApp {
                     .color(egui::Color32::from_rgb(230, 239, 250)),
             );
             ui.label(
-                egui::RichText::new("HTTP BENCHMARK")
+                egui::RichText::new("RED TEAM WORKBENCH")
                     .size(10.0)
                     .strong()
                     .color(egui::Color32::from_rgb(130, 151, 176)),
@@ -507,7 +511,7 @@ impl RedPulseApp {
     fn tester_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.heading(
-            egui::RichText::new("HTTP Benchmark")
+            egui::RichText::new("Load Testing")
                 .size(23.0)
                 .strong()
                 .color(egui::Color32::from_rgb(235, 242, 250)),
@@ -932,18 +936,23 @@ impl RedPulseApp {
                 .color(egui::Color32::from_rgb(235, 242, 250)),
         );
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-        ui.label("A native Rust desktop HTTP benchmarking workbench.");
+        ui.label("A native Rust desktop red-team web assessment and HTTP benchmarking workbench.");
         ui.add_space(8.0);
         ui.label("Engine: Tokio + Reqwest + Rustls");
         ui.label("Interface: egui / eframe");
+        ui.label("Recon: bounded HTTP surface inspection, header and cookie posture checks");
+        ui.label("Load testing: Constant Arrival Rate and Closed Loop");
         ui.label("Metrics: response status, throughput and latency percentiles");
-        ui.label("Reports: JSON and CSV");
+        ui.label("Reports: JSON and CSV for benchmark runs");
+        ui.label("Recon profile: six sequential HTTP probes, no redirects, five-second timeout");
         ui.separator();
         ui.label(
             "Constant Arrival Rate schedules requests independently from HTTP worker completion.",
         );
         ui.label("Closed Loop lets each worker repeat only after its previous request completes.");
         ui.label("A bounded queue reports constant-rate overload as dropped arrivals instead of delaying future slots.");
+        ui.label("Recon uses a fixed low-volume probe set: GET, HEAD, OPTIONS, security.txt, robots.txt and sitemap.xml.");
+        ui.label("No credential guessing, exploit payloads, destructive HTTP methods or recursive wordlist scans are part of the recon profile.");
         ui.label("Redirect following is disabled; each sample measures the configured endpoint response.");
     }
 }
@@ -969,7 +978,13 @@ impl eframe::App for RedPulseApp {
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 if ui
-                    .selectable_label(self.tab == Tab::Tester, "◉  Tester")
+                    .selectable_label(self.tab == Tab::Recon, "◈  Recon")
+                    .clicked()
+                {
+                    self.tab = Tab::Recon;
+                }
+                if ui
+                    .selectable_label(self.tab == Tab::Tester, "◉  Load Test")
                     .clicked()
                 {
                     self.tab = Tab::Tester;
@@ -998,6 +1013,7 @@ impl eframe::App for RedPulseApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| match self.tab {
+                Tab::Recon => self.recon.ui(ui),
                 Tab::Tester => self.tester_ui(ui),
                 Tab::Results => self.results_ui(ui),
                 Tab::About => self.about_ui(ui),

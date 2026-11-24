@@ -2,6 +2,21 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.2.0] - 2026-11-24
+
+### Added
+- New Web Recon tab and Red Team Workbench positioning.
+- Bounded six-probe HTTP assessment: GET, HEAD, OPTIONS, security.txt, robots.txt and sitemap.xml.
+- DNS address resolution and basic HTTP technology fingerprinting.
+- Security posture checks for HSTS, CSP, framing, MIME sniffing, Referrer-Policy, Permissions-Policy, cookies and CORS.
+- OPTIONS-based advertised HTTP method inspection without invoking advertised methods.
+- Evidence-backed findings with severity and remediation guidance.
+- Five-second probe timeout, sequential execution, fixed 250 ms spacing, no redirect following and early stop on HTTP 429/503.
+
+### Changed
+- The existing HTTP benchmark is now presented as the Load Test module.
+- Application branding now describes a Red Team Workbench rather than an HTTP benchmark only.
+
 ## [0.1.6] - 2026-11-24
 
 ### Added

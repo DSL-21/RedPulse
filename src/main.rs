@@ -3,6 +3,7 @@
 mod app;
 mod engine;
 mod report;
+mod recon;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {

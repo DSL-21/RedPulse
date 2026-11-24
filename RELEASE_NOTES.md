@@ -1,36 +1,49 @@
-# RedPulse 0.1.6
+# RedPulse 0.2.0
 
-RedPulse 0.1.6 hardens request generation, bounds per-run resource use and improves latency chart fidelity.
+RedPulse 0.2.0 introduces the Web Recon module and positions the application as a native red-team web assessment workbench while retaining the existing HTTP load-testing engine.
 
-## Global engine guardrails
+## Web Recon profile
 
-- Both load models share a hard global ceiling of 200 request starts per second.
-- Every run is limited to 10,000 scheduled request attempts.
-- Constant Arrival Rate continues to use its bounded queue and records queue overflow or missed slots as dropped arrivals.
-- Closed Loop uses a shared monotonic start pacer across all workers and cannot exceed the global request-start ceiling.
-- When the request budget is exhausted, no further request is scheduled; already in-flight requests are allowed to finish or are accounted as cancelled when the run ends.
+The Recon tab performs six sequential probes:
 
-## Request and response validation
+- GET the target URL with a bounded 128 KiB body sample for technology hints.
+- HEAD the target URL.
+- OPTIONS the target URL to inspect the Allow header without invoking advertised methods.
+- GET `/.well-known/security.txt`.
+- GET `/robots.txt`.
+- GET `/sitemap.xml`.
 
-- POST bodies must parse as valid JSON.
-- POST request bodies are limited to 256 KiB.
-- Measured response bodies remain limited to 2 MiB per request.
-- Existing timeout, worker, duration and URL validation remain in place.
+Each probe uses a five-second request timeout and the probe sequence uses a fixed 250 ms interval. Redirects are not followed. The probe sequence stops early on HTTP 429 or 503. DNS address resolution is shown separately.
 
-## Full-run chart history
+## Audit checks
 
-- Each sample now records elapsed completion time in microseconds, while retaining the millisecond field for compatibility.
-- The chart keeps the full run timeline rather than only the latest 600 samples.
-- The graph renders at most 2,000 points using min/max-preserving buckets, retaining latency spikes while limiting UI work.
-- CSV exports include both microsecond and millisecond elapsed fields.
-- JSON and final engine statistics identify when the per-run request budget was reached.
+- HSTS and HTTPS posture signal.
+- Content Security Policy.
+- Framing protection via X-Frame-Options or CSP frame-ancestors.
+- X-Content-Type-Options.
+- Referrer-Policy and Permissions-Policy.
+- Cookie Secure, HttpOnly and SameSite attributes.
+- Wildcard CORS combined with credentials.
+- Advertised HTTP methods from OPTIONS.
+- Server and technology disclosure headers and basic HTML technology hints.
+- Presence of security.txt, robots.txt and sitemap.xml.
 
-## Automated validation
+Each finding includes severity, evidence and a recommendation. Missing headers and technology fingerprints are observations that require manual review; they are not presented as proof of exploitability.
 
-- Request-budget reservation tests.
-- Invalid and oversized POST JSON tests.
-- Closed Loop shared-pacer test.
-- Local HTTP timeout integration test.
-- Full timeline and latency-spike downsampling tests.
-- Existing GET/POST, slow-server, cancellation and scheduler tests.
-- Rust formatting, Clippy with warnings denied and Windows x64 release build.
+## Bounded behavior
+
+- Six fixed HTTP probes per assessment.
+- Five-second probe timeout.
+- Sequential requests with fixed spacing.
+- Redirect following disabled.
+- Early stop when HTTP 429 or 503 is returned.
+- Response body sampling capped at 128 KiB.
+- No credential guessing, exploit payloads, destructive methods, recursive wordlist discovery or high-volume traffic generation in this profile.
+
+## Existing Load Testing
+
+The Constant Arrival Rate and Closed Loop benchmark modes remain available in the Load Test tab, including their request accounting, rate ceiling, request budget and latency analytics.
+
+## Validation
+
+The release pipeline runs formatting, Rust unit tests, Clippy with warnings denied and the optimized Windows x64 release build.
