@@ -611,7 +611,7 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
     let probes = [
         (Method::GET, target_url.clone(), true),
         (Method::HEAD, target_url.clone(), false),
-        (Method::OPTIONS, target_url, false),
+        (Method::OPTIONS, target_url.clone(), false),
         (Method::GET, security_txt, false),
         (Method::GET, robots, false),
         (Method::GET, sitemap, false),
