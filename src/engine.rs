@@ -612,12 +612,12 @@ fn spawn_hardware_monitor(
                 let now = Instant::now();
                 let interval_secs = now.duration_since(previous_tick).as_secs_f64().max(0.001);
                 let received_bytes = networks
-                    .iter()
-                    .map(|(_, network)| network.received())
+                    .values()
+                    .map(|network| network.received())
                     .sum::<u64>();
                 let transmitted_bytes = networks
-                    .iter()
-                    .map(|(_, network)| network.transmitted())
+                    .values()
+                    .map(|network| network.transmitted())
                     .sum::<u64>();
                 let process = system.process(pid);
 
