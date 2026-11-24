@@ -354,15 +354,16 @@ impl StartPacer {
         }
     }
 
-    async fn wait_turn(&self, stop: Arc<AtomicBool>, deadline: Instant) -> bool {
-        let slot = {
-            let mut next_slot = self.next_slot.lock().await;
-            let now = Instant::now();
-            let slot = (*next_slot).max(now);
-            *next_slot = slot + self.interval;
-            slot
-        };
+    async fn reserve_slot(&self) -> Instant {
+        let mut next_slot = self.next_slot.lock().await;
+        let now = Instant::now();
+        let slot = (*next_slot).max(now);
+        *next_slot = slot + self.interval;
+        slot
+    }
 
+    async fn wait_turn(&self, stop: Arc<AtomicBool>, deadline: Instant) -> bool {
+        let slot = self.reserve_slot().await;
         tokio::select! {
             _ = wait_for_stop(stop) => false,
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => false,
@@ -939,24 +940,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closed_loop_global_pacer_spaces_starts() {
+    async fn closed_loop_global_pacer_reserves_spaced_start_slots() {
         let now = Instant::now();
         let pacer = StartPacer::new(now, MAX_RPS);
-        let deadline = now + Duration::from_secs(1);
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut starts = Vec::new();
+        let mut slots = Vec::new();
 
         for _ in 0..5 {
-            assert!(pacer.wait_turn(Arc::clone(&stop), deadline).await);
-            starts.push(Instant::now());
+            slots.push(pacer.reserve_slot().await);
         }
 
-        for pair in starts.windows(2) {
+        for pair in slots.windows(2) {
             assert!(
-                pair[1].duration_since(pair[0]) >= Duration::from_millis(4),
-                "global safety pacer must keep starts spaced"
+                pair[1].duration_since(pair[0]) >= Duration::from_millis(5),
+                "global safety pacer must reserve slots at least one interval apart"
             );
         }
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        assert!(pacer.wait_turn(stop, deadline).await);
     }
 
     #[test]
