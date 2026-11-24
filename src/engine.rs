@@ -187,9 +187,7 @@ fn validate(config: &TestConfig) -> Result<(), String> {
     if queue_capacity > tokio::sync::Semaphore::MAX_PERMITS {
         return Err("Worker count exceeds the platform's bounded-queue capacity.".into());
     }
-    if config.load_model == LoadModel::ConstantArrivalRate
-        && config.max_requests_per_second == 0
-    {
+    if config.load_model == LoadModel::ConstantArrivalRate && config.max_requests_per_second == 0 {
         return Err("Arrival rate must be at least 1 request/second.".into());
     }
     if config.duration_secs == 0 {

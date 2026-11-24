@@ -10,7 +10,7 @@ use hdrhistogram::Histogram;
 
 use crate::{
     engine::{
-        self, EngineEvent, EngineStats, LoadModel, DEFAULT_MAX_TOTAL_REQUESTS,
+        self, DEFAULT_MAX_TOTAL_REQUESTS, EngineEvent, EngineStats, LoadModel,
         MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
     },
     recon::ReconState,
@@ -576,7 +576,9 @@ impl RedPulseApp {
                 ui.label("Workers");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::DragValue::new(&mut self.workers).speed(1).suffix(" concurrent"),
+                    egui::DragValue::new(&mut self.workers)
+                        .speed(1)
+                        .suffix(" concurrent"),
                 );
             });
             ui.add_space(16.0);
@@ -584,7 +586,9 @@ impl RedPulseApp {
                 ui.label("Duration");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::DragValue::new(&mut self.duration).speed(1).suffix(" s"),
+                    egui::DragValue::new(&mut self.duration)
+                        .speed(1)
+                        .suffix(" s"),
                 );
             });
             ui.add_space(16.0);
@@ -592,7 +596,9 @@ impl RedPulseApp {
                 ui.label("Arrival rate");
                 ui.add_enabled(
                     self.running.is_none() && self.load_model == LoadModel::ConstantArrivalRate,
-                    egui::DragValue::new(&mut self.rps).speed(10).suffix(" req/s"),
+                    egui::DragValue::new(&mut self.rps)
+                        .speed(10)
+                        .suffix(" req/s"),
                 );
             });
             ui.add_space(16.0);
@@ -600,7 +606,9 @@ impl RedPulseApp {
                 ui.label("Timeout");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::DragValue::new(&mut self.timeout).speed(1).suffix(" s"),
+                    egui::DragValue::new(&mut self.timeout)
+                        .speed(1)
+                        .suffix(" s"),
                 );
             });
         });
@@ -619,7 +627,9 @@ impl RedPulseApp {
             ui.label("Request budget");
             ui.add_enabled(
                 self.running.is_none(),
-                egui::DragValue::new(&mut self.max_requests).speed(100).suffix(" requests"),
+                egui::DragValue::new(&mut self.max_requests)
+                    .speed(100)
+                    .suffix(" requests"),
             );
         });
         ui.label(
