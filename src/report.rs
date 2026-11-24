@@ -17,6 +17,7 @@ pub struct RunConfig<'a> {
     pub actual_elapsed_secs: f64,
     pub max_total_requests: u64,
     pub dns_strategy: DnsStrategy,
+    pub backend_id_header: &'a str,
     pub resolved_addresses: &'a [String],
     pub stats: EngineStats,
 }
@@ -45,6 +46,10 @@ pub fn export_json(path: &Path, config: &RunConfig<'_>, samples: &[Sample]) -> R
     Ok(())
 }
 
+fn csv_field(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
 fn status_class(status: u16) -> &'static str {
     match status / 100 {
         0 => "network_error",
@@ -60,20 +65,22 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     let mut file = File::create(path).context("Could not create CSV file")?;
     writeln!(
         file,
-        "elapsed_us,elapsed_ms,latency_ms,status,status_class,endpoint_ip,bytes,ok,error,timestamp"
+        "elapsed_us,elapsed_ms,latency_ms,status,status_class,endpoint_ip,backend_id,bytes,ok,error,timestamp"
     )?;
     for sample in samples {
-        let error = sample.error.as_deref().unwrap_or("").replace('"', "\"\"");
-        let endpoint_ip = sample.endpoint_ip.as_deref().unwrap_or("");
+        let error = csv_field(sample.error.as_deref().unwrap_or(""));
+        let endpoint_ip = csv_field(sample.endpoint_ip.as_deref().unwrap_or(""));
+        let backend_id = csv_field(sample.backend_id.as_deref().unwrap_or(""));
         writeln!(
             file,
-            "{},{},{:.3},{},{},\"{}\",{},{},\"{}\",{}",
+            "{},{},{:.3},{},{},{},{},{},{},{},{}",
             sample.elapsed_us,
             sample.elapsed_ms,
             sample.latency_ms,
             sample.status,
             status_class(sample.status),
             endpoint_ip,
+            backend_id,
             sample.bytes,
             sample.ok,
             error,
