@@ -292,12 +292,16 @@ impl RedPulseApp {
         )
     }
 
-    fn observed_rps(&self) -> f64 {
-        if self.elapsed_seconds <= 0.0 {
+    fn calculate_rps(requests: u64, elapsed_seconds: f64) -> f64 {
+        if !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 {
             0.0
         } else {
-            self.total_received as f64 / self.elapsed_seconds
+            requests as f64 / elapsed_seconds
         }
+    }
+
+    fn observed_rps(&self) -> f64 {
+        Self::calculate_rps(self.total_received, self.elapsed_seconds)
     }
 
     fn export(&mut self, csv: bool) {
@@ -387,6 +391,8 @@ impl RedPulseApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (color, status) = if self.running.is_some() {
                     (egui::Color32::from_rgb(73, 205, 145), "RUNNING")
+                } else if self.status == "Starting" {
+                    (egui::Color32::from_rgb(105, 174, 238), "STARTING")
                 } else if self.status == "Completed" {
                     (egui::Color32::from_rgb(76, 181, 132), "COMPLETED")
                 } else if self.status == "Failed" {
@@ -837,5 +843,25 @@ impl eframe::App for RedPulseApp {
                 Tab::About => self.about_ui(ui),
             });
         });
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::RedPulseApp;
+
+    #[test]
+    fn observed_rps_uses_measured_elapsed_time() {
+        assert!((RedPulseApp::calculate_rps(150, 30.0) - 5.0).abs() < 0.000_001);
+        assert!((RedPulseApp::calculate_rps(10, 2.0) - 5.0).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn observed_rps_handles_zero_or_invalid_elapsed_time() {
+        assert_eq!(RedPulseApp::calculate_rps(10, 0.0), 0.0);
+        assert_eq!(RedPulseApp::calculate_rps(10, -1.0), 0.0);
+        assert_eq!(RedPulseApp::calculate_rps(10, f64::NAN), 0.0);
+        assert_eq!(RedPulseApp::calculate_rps(10, f64::INFINITY), 0.0);
     }
 }
