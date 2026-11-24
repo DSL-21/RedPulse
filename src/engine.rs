@@ -39,9 +39,12 @@ pub struct Sample {
 
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
-    Started,
+    Started { at: Instant },
     Sample(Sample),
-    Finished { stopped: bool },
+    Finished {
+        stopped: bool,
+        elapsed_secs: f64,
+    },
     Fatal(String),
 }
 
@@ -188,7 +191,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         let method = if config.method == "POST" { Method::POST } else { Method::GET };
         let started = Instant::now();
         let deadline = started + Duration::from_secs(config.duration_secs);
-        let _ = tx.send(EngineEvent::Started);
+        let _ = tx.send(EngineEvent::Started { at: started });
         let interval = Duration::from_secs_f64(1.0 / config.max_requests_per_second as f64);
         let next_slot = Arc::new(tokio::sync::Mutex::new(Instant::now()));
         let mut tasks = tokio::task::JoinSet::new();
@@ -306,6 +309,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         }
         let _ = tx.send(EngineEvent::Finished {
             stopped: stop.load(Ordering::Relaxed),
+            elapsed_secs: started.elapsed().as_secs_f64(),
         });
     });
 }
@@ -391,7 +395,7 @@ mod tests {
                 .recv_timeout(Duration::from_secs(3))
                 .expect("receive engine event")
             {
-                EngineEvent::Started => {}
+                EngineEvent::Started { .. } => {}
                 EngineEvent::Sample(sample) => {
                     assert_eq!(sample.status, 200);
                     assert_eq!(sample.bytes, 2);
