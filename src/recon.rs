@@ -839,7 +839,10 @@ fn render_report(ui: &mut egui::Ui, report: &ReconReport) {
 fn metric(ui: &mut egui::Ui, title: &str, value: String) {
     egui::Frame::group(ui.style())
         .fill(egui::Color32::from_rgb(25, 34, 48))
-        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(48, 65, 86)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(48, 65, 86),
+        ))
         .corner_radius(10)
         .inner_margin(10)
         .show(ui, |ui| {
