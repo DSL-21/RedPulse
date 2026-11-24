@@ -22,7 +22,7 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 - Constant Arrival Rate mode for fixed-time request arrivals
 - Closed Loop mode for worker-paced requests
 - Independent monotonic arrival scheduler with a bounded worker queue
-- Live request count, observed RPS and a fixed, non-interactive response-time chart
+- Live request count, observed RPS and a fixed, non-interactive response-time chart with full-run history
 - Min, average, P50, P95, P99 and max HTTP response latency
 - P50 and P95 reference lines on the response-time chart
 - Separate HTTP 2xx, 3xx, 4xx and 5xx counts plus network errors
@@ -33,6 +33,10 @@ The release includes a SHA-256 checksum file named `RedPulse.exe.sha256`.
 - Redirect following disabled
 - Bounded response measurement and retained UI samples
 - Rustls TLS backend
+- Global 200 request-starts/second safety ceiling across both load models
+- Hard 10,000 scheduled-request budget per run
+- POST JSON validation and 256 KiB request-body limit
+- Microsecond request completion timestamps and full-timeline min/max chart downsampling
 
 ## Quick start
 
@@ -56,26 +60,28 @@ A monotonic scheduler attempts to create one request arrival at each configured 
 
 ### Closed Loop
 
-Each worker starts its next request only after its previous request has completed. There is no arrival timer and no waiting queue in this mode. Throughput emerges from worker count and observed response time, so slower responses naturally reduce the number of new requests started. The arrival-rate slider is disabled because it does not apply to this model.
+Each worker starts its next request only after its previous request has completed. There is no arrival timer and no waiting queue in this mode. Throughput emerges from worker count and observed response time, so slower responses naturally reduce the number of new requests started. A shared safety pacer caps request starts at 200 per second across all workers; the 10,000-request run budget also applies. The arrival-rate slider is disabled because it does not apply to this model.
 
-Both modes use the same request timeout, response measurement limit, cancellation handling, status classification and latency analytics. Final observed RPS uses the engine's monotonic elapsed duration rather than GUI refresh timing.
+Both modes share the same global request-start ceiling, total request budget, request-body validation, response measurement limit, cancellation handling, status classification and latency analytics. Final observed RPS uses the engine's monotonic elapsed duration rather than GUI refresh timing.
 
 For each request, RedPulse records elapsed time, response latency, status code, measured response size, and any transport or body-read error. Run accounting distinguishes scheduled arrivals, started attempts, completed attempts, queued jobs, in-flight requests, cancelled jobs and dropped arrivals. HTTP response latency statistics include HTTP responses (including 4xx and 5xx) and exclude transport failures such as DNS, connection and timeout errors; those failures are counted separately. Redirects are not followed, so a 3xx response is measured directly rather than silently sending another request. The chart plots the most recent HTTP response samples against elapsed time and includes P50/P95 reference lines. It is intentionally non-interactive: zoom, pan, wheel scaling and double-click reset are disabled so the mouse wheel remains available for scrolling the dashboard.
 
-## Initial release limits
+## Engine safety limits
 
 The first release uses explicit upper bounds:
 
 | Setting | Range |
 |---|---:|
 | Workers | 1–64 |
-| Request rate | 1–200 requests/second |
+| Constant Arrival Rate | 1–200 request arrivals/second |
+| Global start-rate ceiling | 200 request starts/second in both models |
+| Scheduled request budget | 10,000 per run |
 | Duration | 1–300 seconds |
 | Timeout | 1–60 seconds |
+| POST JSON body | Up to 256 KiB; must be valid JSON |
 | Measured response body | Up to 2 MiB per request |
-| Retained request samples | Up to 20,000 |
-
-The dashboard totals and latency histogram cover all samples received during a run. The detailed request table and exported report retain at most the most recent 20,000 samples. The chart displays the most recent 600 latency points.
+| Retained samples | Up to 10,000 per run |
+| Chart rendering | Up to 2,000 min/max-preserving points; full timeline retained |
 
 ## Build from source
 
@@ -113,7 +119,7 @@ Reports are written to the application's current working directory using the nam
 
 ## Project status
 
-RedPulse 0.1.5 is the sixth public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are planned for later versions.
+RedPulse 0.1.6 is the seventh public release. The desktop window opens at a compact 1040 × 700 logical-pixel size by default. Results keep the configuration snapshot from the run, including the engine-measured elapsed duration. Final observed RPS is calculated from the engine's monotonic clock, not GUI frame timing. HTTP response latency metrics exclude transport failures and timeouts, which remain visible in the separate network-error count. The response chart shows elapsed time and latency axes, P50/P95 reference lines, and fixed chart bounds with mouse and pointer interaction disabled. It focuses on a small, understandable HTTP benchmarking workflow. Scenario collections, custom headers, cookies, authentication profiles, ramp-up profiles, and additional HTTP methods are planned for later versions.
 
 ## License
 

@@ -15,6 +15,8 @@ pub struct RunConfig<'a> {
     pub load_model: crate::engine::LoadModel,
     pub timeout_secs: u64,
     pub actual_elapsed_secs: f64,
+    pub global_rate_limit_rps: u32,
+    pub max_total_requests: u64,
     pub stats: EngineStats,
 }
 
@@ -57,13 +59,14 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     let mut file = File::create(path).context("Could not create CSV file")?;
     writeln!(
         file,
-        "elapsed_ms,latency_ms,status,status_class,bytes,ok,error,timestamp"
+        "elapsed_us,elapsed_ms,latency_ms,status,status_class,bytes,ok,error,timestamp"
     )?;
     for sample in samples {
         let error = sample.error.as_deref().unwrap_or("").replace('"', "\"\"");
         writeln!(
             file,
-            "{},{:.3},{},{},{},{},\"{}\",{}",
+            "{},{},{:.3},{},{},{},{},\"{}\",{}",
+            sample.elapsed_us,
             sample.elapsed_ms,
             sample.latency_ms,
             sample.status,

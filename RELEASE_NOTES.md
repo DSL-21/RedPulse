@@ -1,29 +1,36 @@
-# RedPulse 0.1.5
+# RedPulse 0.1.6
 
-RedPulse 0.1.5 adds explicit load-model selection so users can compare fixed request arrivals with worker-paced traffic.
+RedPulse 0.1.6 hardens request generation, bounds per-run resource use and improves latency chart fidelity.
 
-## Constant Arrival Rate
+## Global engine guardrails
 
-- Preserves the independent monotonic scheduler introduced in 0.1.4.
-- Attempts request arrivals at the configured requests-per-second interval.
-- Uses a bounded queue shared by HTTP workers.
-- Counts missed or rejected arrivals as dropped; it does not generate catch-up bursts.
-- Worker count limits concurrent in-flight requests.
+- Both load models share a hard global ceiling of 200 request starts per second.
+- Every run is limited to 10,000 scheduled request attempts.
+- Constant Arrival Rate continues to use its bounded queue and records queue overflow or missed slots as dropped arrivals.
+- Closed Loop uses a shared monotonic start pacer across all workers and cannot exceed the global request-start ceiling.
+- When the request budget is exhausted, no further request is scheduled; already in-flight requests are allowed to finish or are accounted as cancelled when the run ends.
 
-## Closed Loop
+## Request and response validation
 
-- Each worker starts its next request only after its previous request completes.
-- No arrival scheduler or waiting queue is used.
-- Throughput emerges from worker count and response time.
-- The arrival-rate slider is disabled because it does not apply to this mode.
-- The final accounting still reports scheduled, started, completed, in-flight, cancelled and dropped requests.
+- POST bodies must parse as valid JSON.
+- POST request bodies are limited to 256 KiB.
+- Measured response bodies remain limited to 2 MiB per request.
+- Existing timeout, worker, duration and URL validation remain in place.
 
-## Reporting and UI
+## Full-run chart history
 
-- The Tester page has a Load model selector.
-- Results show the selected load model and distinguish an arrival-rate target from worker-paced throughput.
-- JSON run metadata contains the load model and an optional request-rate target.
+- Each sample now records elapsed completion time in microseconds, while retaining the millisecond field for compatibility.
+- The chart keeps the full run timeline rather than only the latest 600 samples.
+- The graph renders at most 2,000 points using min/max-preserving buckets, retaining latency spikes while limiting UI work.
+- CSV exports include both microsecond and millisecond elapsed fields.
+- JSON and final engine statistics identify when the per-run request budget was reached.
 
-## Validation
+## Automated validation
 
-The release workflow checks Rust formatting, runs unit and local HTTP integration tests for both load models, runs Clippy with warnings treated as errors, and builds the optimized Windows x64 executable with the Microsoft C runtime statically linked.
+- Request-budget reservation tests.
+- Invalid and oversized POST JSON tests.
+- Closed Loop shared-pacer test.
+- Local HTTP timeout integration test.
+- Full timeline and latency-spike downsampling tests.
+- Existing GET/POST, slow-server, cancellation and scheduler tests.
+- Rust formatting, Clippy with warnings denied and Windows x64 release build.

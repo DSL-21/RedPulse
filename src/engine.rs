@@ -64,10 +64,12 @@ pub struct EngineStats {
     pub in_flight: u64,
     pub cancelled: u64,
     pub dropped: u64,
+    pub limit_reached: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sample {
+    pub elapsed_us: u64,
     pub elapsed_ms: u64,
     pub latency_ms: f64,
     pub status: u16,
@@ -119,10 +121,12 @@ impl Drop for TestHandle {
     }
 }
 
-const MAX_WORKERS: usize = 64;
-const MAX_RPS: u32 = 200;
-const MAX_DURATION_SECS: u64 = 300;
-const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_WORKERS: usize = 64;
+pub const MAX_RPS: u32 = 200;
+pub const MAX_DURATION_SECS: u64 = 300;
+pub const MAX_TOTAL_REQUESTS: u64 = 10_000;
+pub const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
+pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_QUEUE_CAPACITY: usize = 128;
 
 #[derive(Default)]
@@ -131,6 +135,7 @@ struct Counters {
     started: AtomicU64,
     completed: AtomicU64,
     dropped: AtomicU64,
+    limit_reached: AtomicBool,
 }
 
 impl Counters {
@@ -149,6 +154,7 @@ impl Counters {
             in_flight: started.saturating_sub(completed),
             cancelled: 0,
             dropped,
+            limit_reached: self.limit_reached.load(Ordering::Relaxed),
         }
     }
 
@@ -194,6 +200,16 @@ fn validate(config: &TestConfig) -> Result<(), String> {
     }
     if !matches!(config.method.as_str(), "GET" | "POST") {
         return Err("Supported methods are GET and POST.".into());
+    }
+    if config.method == "POST" {
+        if config.body.len() > MAX_REQUEST_BODY_BYTES {
+            return Err(format!(
+                "POST JSON body exceeds the {} KiB limit.",
+                MAX_REQUEST_BODY_BYTES / 1024
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(&config.body)
+            .map_err(|error| format!("POST body must be valid JSON: {error}"))?;
     }
     Ok(())
 }
@@ -298,6 +314,63 @@ fn overdue_slots(now: Instant, next_slot: Instant, interval: Duration) -> u64 {
     }
 }
 
+fn reserve_slots(counter: &AtomicU64, requested: u64, maximum: u64) -> u64 {
+    if requested == 0 {
+        return 0;
+    }
+
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        if current >= maximum {
+            return 0;
+        }
+        let granted = requested.min(maximum - current);
+        match counter.compare_exchange_weak(
+            current,
+            current + granted,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return granted,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn reserve_one(counter: &AtomicU64, maximum: u64) -> bool {
+    reserve_slots(counter, 1, maximum) == 1
+}
+
+struct StartPacer {
+    next_slot: tokio::sync::Mutex<Instant>,
+    interval: Duration,
+}
+
+impl StartPacer {
+    fn new(start: Instant, maximum_rate: u32) -> Self {
+        Self {
+            next_slot: tokio::sync::Mutex::new(start),
+            interval: Duration::from_secs_f64(1.0 / maximum_rate as f64),
+        }
+    }
+
+    async fn wait_turn(&self, stop: Arc<AtomicBool>, deadline: Instant) -> bool {
+        let slot = {
+            let mut next_slot = self.next_slot.lock().await;
+            let now = Instant::now();
+            let slot = (*next_slot).max(now);
+            *next_slot = slot + self.interval;
+            slot
+        };
+
+        tokio::select! {
+            _ = wait_for_stop(stop) => false,
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => false,
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(slot)) => true,
+        }
+    }
+}
+
 async fn perform_request(
     client: &Client,
     method: Method,
@@ -316,14 +389,18 @@ async fn perform_request(
         response = execute_request(client, method, url, body) => Some(response),
     };
 
-    result.map(|(status, bytes, ok, error)| Sample {
-        elapsed_ms: run_started.elapsed().as_millis() as u64,
-        latency_ms: request_started.elapsed().as_secs_f64() * 1000.0,
-        status,
-        bytes,
-        ok,
-        error,
-        timestamp: Utc::now(),
+    result.map(|(status, bytes, ok, error)| {
+        let elapsed_us = run_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        Sample {
+            elapsed_us,
+            elapsed_ms: elapsed_us / 1000,
+            latency_ms: request_started.elapsed().as_secs_f64() * 1000.0,
+            status,
+            bytes,
+            ok,
+            error,
+            timestamp: Utc::now(),
+        }
     })
 }
 
@@ -461,39 +538,64 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                         // Missed slots are accounted as dropped; no catch-up burst.
                         let overdue = overdue_slots(Instant::now(), next_slot, interval);
                         if overdue > 0 {
-                            scheduler_counters
-                                .scheduled
-                                .fetch_add(overdue, Ordering::Relaxed);
-                            scheduler_counters
-                                .dropped
-                                .fetch_add(overdue, Ordering::Relaxed);
-                            next_slot += interval * overdue.min(u32::MAX as u64) as u32;
+                            let missed = reserve_slots(
+                                &scheduler_counters.scheduled,
+                                overdue,
+                                MAX_TOTAL_REQUESTS,
+                            );
+                            if missed > 0 {
+                                scheduler_counters.dropped.fetch_add(missed, Ordering::Relaxed);
+                            }
+                            next_slot += interval * missed.min(u32::MAX as u64) as u32;
                             emit_stats(&scheduler_tx, &scheduler_counters);
+                            if missed < overdue {
+                                scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            if scheduler_counters.scheduled.load(Ordering::Relaxed)
+                                >= MAX_TOTAL_REQUESTS
+                            {
+                                scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                                break;
+                            }
                         }
 
                         if next_slot >= deadline {
                             break;
                         }
 
-                        scheduler_counters.scheduled.fetch_add(1, Ordering::Relaxed);
+                        if !reserve_one(&scheduler_counters.scheduled, MAX_TOTAL_REQUESTS) {
+                            scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                            emit_stats(&scheduler_tx, &scheduler_counters);
+                            break;
+                        }
                         if job_tx.try_send(()).is_err() {
                             scheduler_counters.dropped.fetch_add(1, Ordering::Relaxed);
                         }
                         emit_stats(&scheduler_tx, &scheduler_counters);
                         next_slot += interval;
+
+                        if scheduler_counters.scheduled.load(Ordering::Relaxed)
+                            >= MAX_TOTAL_REQUESTS
+                        {
+                            scheduler_counters.limit_reached.store(true, Ordering::Relaxed);
+                            emit_stats(&scheduler_tx, &scheduler_counters);
+                            break;
+                        }
                     }
                 }));
             }
             LoadModel::ClosedLoop => {
                 // Closed-loop mode has no arrival timer or waiting queue.
-                // Each worker sends its next request only after the previous
-                // request has fully completed, so throughput emerges from
-                // worker count and observed response time.
+                // All workers share a monotonic global start-rate pacer and
+                // a hard per-run request budget.
+                let pacer = Arc::new(StartPacer::new(started, MAX_RPS));
                 for _ in 0..config.workers {
                     let client = client.clone();
                     let worker_tx = tx.clone();
                     let worker_stop = Arc::clone(&stop);
                     let worker_counters = Arc::clone(&counters);
+                    let worker_pacer = Arc::clone(&pacer);
                     let url = config.url.clone();
                     let body = config.body.clone();
                     let method = method.clone();
@@ -503,8 +605,18 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
                             if worker_stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
                                 break;
                             }
+                            if !worker_pacer
+                                .wait_turn(Arc::clone(&worker_stop), deadline)
+                                .await
+                            {
+                                break;
+                            }
+                            if !reserve_one(&worker_counters.scheduled, MAX_TOTAL_REQUESTS) {
+                                worker_counters.limit_reached.store(true, Ordering::Relaxed);
+                                emit_stats(&worker_tx, &worker_counters);
+                                break;
+                            }
 
-                            worker_counters.scheduled.fetch_add(1, Ordering::Relaxed);
                             worker_counters.started.fetch_add(1, Ordering::Relaxed);
                             emit_stats(&worker_tx, &worker_counters);
 
@@ -606,11 +718,37 @@ mod tests {
     }
 
     #[test]
-    fn closed_loop_does_not_require_an_arrival_rate() {
+    fn closed_loop_does_not_require_a_user_arrival_rate() {
         let mut cfg = config("https://example.com");
         cfg.load_model = LoadModel::ClosedLoop;
         cfg.max_requests_per_second = 0;
         assert!(validate(&cfg).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_json_post_body() {
+        let mut cfg = config("https://example.com");
+        cfg.method = "POST".into();
+        cfg.body = r#"{"broken":"json""#.into();
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_json_post_body() {
+        let mut cfg = config("https://example.com");
+        cfg.method = "POST".into();
+        cfg.body = format!(r#"{{"data":"{}"}}"#, "x".repeat(MAX_REQUEST_BODY_BYTES));
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn request_budget_cannot_be_exceeded() {
+        let counter = AtomicU64::new(0);
+        assert_eq!(reserve_slots(&counter, 2, 3), 2);
+        assert!(reserve_one(&counter, 3));
+        assert!(!reserve_one(&counter, 3));
+        assert_eq!(reserve_slots(&counter, 100, 3), 0);
+        assert_eq!(counter.load(Ordering::Relaxed), 3);
     }
 
     #[test]
@@ -788,6 +926,88 @@ mod tests {
             stats.cancelled,
             stats.scheduled - stats.dropped - stats.completed
         );
+    }
+
+    #[tokio::test]
+    async fn closed_loop_global_pacer_spaces_starts() {
+        let now = Instant::now();
+        let pacer = StartPacer::new(now, MAX_RPS);
+        let deadline = now + Duration::from_secs(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut starts = Vec::new();
+
+        for _ in 0..5 {
+            assert!(pacer.wait_turn(Arc::clone(&stop), deadline).await);
+            starts.push(Instant::now());
+        }
+
+        for pair in starts.windows(2) {
+            assert!(
+                pair[1].duration_since(pair[0]) >= Duration::from_millis(4),
+                "global safety pacer must keep starts spaced"
+            );
+        }
+    }
+
+    #[test]
+    fn closed_loop_reports_request_timeout_as_network_error() {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind timeout test server");
+        let address = listener.local_addr().expect("timeout server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept timeout test client");
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            thread::sleep(Duration::from_millis(1_400));
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+            );
+        });
+
+        let mut cfg = config(&format!("http://{address}/"));
+        cfg.load_model = LoadModel::ClosedLoop;
+        cfg.workers = 1;
+        cfg.duration_secs = 4;
+        cfg.timeout_secs = 1;
+        let mut handle = start(cfg).expect("start timeout benchmark");
+
+        let sample = loop {
+            match handle
+                .rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("receive timeout benchmark event")
+            {
+                EngineEvent::Started { .. } | EngineEvent::Stats(_) => {}
+                EngineEvent::Sample(sample) => {
+                    handle.stop();
+                    break sample;
+                }
+                EngineEvent::Finished { .. } => panic!("run finished before timeout sample"),
+                EngineEvent::Fatal(message) => panic!("timeout benchmark failed: {message}"),
+            }
+        };
+
+        loop {
+            match handle
+                .rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("receive finished timeout benchmark event")
+            {
+                EngineEvent::Finished { .. } => break,
+                EngineEvent::Started { .. } | EngineEvent::Stats(_) | EngineEvent::Sample(_) => {}
+                EngineEvent::Fatal(message) => panic!("timeout benchmark failed: {message}"),
+            }
+        }
+
+        handle.join();
+        server.join().expect("timeout test server thread");
+        assert_eq!(sample.status, 0);
+        assert!(!sample.ok);
+        assert!(
+            sample.error.as_deref().unwrap_or("").to_lowercase().contains("timed out"),
+            "timeout should be classified clearly"
+        );
+        assert!(sample.elapsed_us >= 900_000);
     }
 
     #[test]

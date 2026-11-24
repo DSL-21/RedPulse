@@ -2,6 +2,22 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.1.6] - 2026-11-24
+
+### Added
+- Global 200 request-starts/second safety ceiling shared by Constant Arrival Rate and Closed Loop.
+- Hard 10,000 scheduled-request budget per run for both load models.
+- POST body validation: valid JSON required, maximum request body size 256 KiB.
+- Microsecond elapsed-completion timestamps in each sample and CSV export.
+- Full-run response chart history with min/max-preserving downsampling to at most 2,000 plotted points.
+- Request-limit reached state included in final engine statistics and JSON reports.
+- Tests for request-budget reservations, invalid/oversized POST bodies, global pacing, request timeouts and chart downsampling.
+
+### Changed
+- Closed Loop can no longer generate unbounded worker-paced request volume.
+- Chart no longer drops the first part of a high-throughput run when more than 600 samples arrive.
+- Detailed results and exports retain the full run within the 10,000-request budget.
+
 ## [0.1.5] - 2026-11-24
 
 ### Added

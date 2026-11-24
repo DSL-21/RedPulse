@@ -9,7 +9,10 @@ use egui_plot::{Line, Plot, PlotPoints};
 use hdrhistogram::Histogram;
 
 use crate::{
-    engine::{self, EngineEvent, EngineStats, LoadModel, Sample, TestConfig, TestHandle},
+    engine::{
+        self, EngineEvent, EngineStats, LoadModel, Sample, TestConfig, TestHandle,
+        MAX_REQUEST_BODY_BYTES, MAX_RPS, MAX_TOTAL_REQUESTS,
+    },
     report,
 };
 
@@ -20,7 +23,60 @@ enum Tab {
     About,
 }
 
-const MAX_UI_SAMPLES: usize = 20_000;
+const MAX_UI_SAMPLES: usize = MAX_TOTAL_REQUESTS as usize;
+const MAX_PLOT_POINTS: usize = 2_000;
+
+fn downsample_min_max(
+    points: &VecDeque<(f64, f64)>,
+    max_points: usize,
+) -> Vec<[f64; 2]> {
+    let mut sorted: Vec<[f64; 2]> = points.iter().map(|(x, y)| [*x, *y]).collect();
+    sorted.sort_by(|left, right| left[0].total_cmp(&right[0]));
+
+    if sorted.len() <= max_points {
+        return sorted;
+    }
+    if max_points < 4 || sorted.len() < 3 {
+        return sorted.into_iter().take(max_points).collect();
+    }
+
+    let interior_len = sorted.len() - 2;
+    let bucket_count = ((max_points - 2) / 2).max(1).min(interior_len);
+    let mut reduced = Vec::with_capacity(max_points);
+    reduced.push(sorted[0]);
+
+    for bucket in 0..bucket_count {
+        let start = 1 + bucket * interior_len / bucket_count;
+        let end = 1 + (bucket + 1) * interior_len / bucket_count;
+        if start >= end {
+            continue;
+        }
+
+        let mut min_index = start;
+        let mut max_index = start;
+        for index in (start + 1)..end {
+            if sorted[index][1] < sorted[min_index][1] {
+                min_index = index;
+            }
+            if sorted[index][1] > sorted[max_index][1] {
+                max_index = index;
+            }
+        }
+
+        if min_index == max_index {
+            reduced.push(sorted[min_index]);
+        } else if min_index < max_index {
+            reduced.push(sorted[min_index]);
+            reduced.push(sorted[max_index]);
+        } else {
+            reduced.push(sorted[max_index]);
+            reduced.push(sorted[min_index]);
+        }
+    }
+
+    reduced.push(*sorted.last().expect("non-empty point series"));
+    reduced
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResponseClass {
@@ -241,10 +297,7 @@ impl RedPulseApp {
             let _ = self.histogram.record(micros.min(60_000_000));
 
             self.recent_latencies
-                .push_back((sample.elapsed_ms as f64 / 1000.0, sample.latency_ms));
-            while self.recent_latencies.len() > 600 {
-                self.recent_latencies.pop_front();
-            }
+                .push_back((sample.elapsed_us as f64 / 1_000_000.0, sample.latency_ms));
         }
 
         if self.samples.len() == MAX_UI_SAMPLES {
@@ -355,6 +408,8 @@ impl RedPulseApp {
                 load_model: run.load_model,
                 timeout_secs: run.timeout_secs,
                 actual_elapsed_secs: run.actual_elapsed_secs,
+                global_rate_limit_rps: MAX_RPS,
+                max_total_requests: MAX_TOTAL_REQUESTS,
                 stats: self.engine_stats,
             };
             report::export_json(&path, &config, &all_samples)
@@ -552,6 +607,15 @@ impl RedPulseApp {
             );
         }
 
+        ui.label(
+            egui::RichText::new(format!(
+                "Engine guardrails: max {MAX_RPS} request starts/s · max {MAX_TOTAL_REQUESTS} requests/run · max {} KiB POST JSON",
+                MAX_REQUEST_BODY_BYTES / 1024
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(137, 157, 181)),
+        );
+
         if self.method == "POST" {
             ui.add_space(8.0);
             ui.label("JSON request body");
@@ -660,23 +724,31 @@ impl RedPulseApp {
             .small()
             .color(egui::Color32::from_rgb(156, 177, 201)),
         );
+        if self.engine_stats.limit_reached {
+            ui.colored_label(
+                egui::Color32::from_rgb(238, 178, 82),
+                "Maximum of 10,000 scheduled requests reached; no further requests were started.",
+            );
+        }
+
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.heading("Response time");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(format!("{} samples", self.recent_latencies.len()))
+                    egui::RichText::new(format!(
+                        "{} samples · {} plotted",
+                        self.recent_latencies.len(),
+                        downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).len()
+                    ))
                         .small()
                         .color(egui::Color32::from_rgb(135, 153, 176)),
                 );
             });
         });
 
-        let points: PlotPoints = self
-            .recent_latencies
-            .iter()
-            .map(|(x, y)| [*x, *y])
-            .collect();
+        let points: PlotPoints =
+            downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
         if self.recent_latencies.is_empty() {
             ui.label("Waiting for HTTP response samples…");
         } else {
@@ -1000,5 +1072,47 @@ mod load_model_ui_tests {
             "Constant Arrival Rate"
         );
         assert_eq!(LoadModel::ClosedLoop.label(), "Closed Loop");
+    }
+}
+
+
+#[cfg(test)]
+mod chart_downsampling_tests {
+    use super::downsample_min_max;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn chart_downsampling_retains_full_time_range() {
+        let points: VecDeque<(f64, f64)> =
+            (0..10_000).map(|index| (index as f64 / 100.0, 50.0)).collect();
+
+        let reduced = downsample_min_max(&points, 2_000);
+        assert!(reduced.len() <= 2_000);
+        assert_eq!(reduced.first().expect("first point")[0], 0.0);
+        assert_eq!(reduced.last().expect("last point")[0], 99.99);
+        assert!(reduced.windows(2).all(|pair| pair[0][0] <= pair[1][0]));
+    }
+
+    #[test]
+    fn chart_downsampling_preserves_minimum_and_maximum_spikes() {
+        let mut points: VecDeque<(f64, f64)> =
+            (0..10_000).map(|index| (index as f64, 50.0)).collect();
+        points[4_321].1 = 900.0;
+        points[7_654].1 = 1.0;
+
+        let reduced = downsample_min_max(&points, 2_000);
+        let values: Vec<f64> = reduced.iter().map(|point| point[1]).collect();
+        assert!(values.contains(&900.0));
+        assert!(values.contains(&1.0));
+        assert!(reduced.len() <= 2_000);
+    }
+
+    #[test]
+    fn short_chart_series_is_not_modified() {
+        let points = VecDeque::from([(0.0, 10.0), (0.5, 15.0), (1.0, 8.0)]);
+        assert_eq!(
+            downsample_min_max(&points, 2_000),
+            vec![[0.0, 10.0], [0.5, 15.0], [1.0, 8.0]]
+        );
     }
 }
