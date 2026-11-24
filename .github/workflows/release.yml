@@ -73,7 +73,11 @@ jobs:
         if: steps.release_state.outputs.exists != 'true'
         run: cargo generate-lockfile
 
-      - name: Commit Cargo.lock to main
+      - name: Format Rust sources
+        if: steps.release_state.outputs.exists != 'true'
+        run: cargo fmt --all
+
+      - name: Commit formatted sources and Cargo.lock to main
         id: source_commit
         if: steps.release_state.outputs.exists != 'true'
         shell: pwsh
@@ -82,10 +86,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock
+          git add Cargo.lock src
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "chore: lock dependencies for v$env:VERSION"
+            git commit -m "chore: prepare formatted sources and locked dependencies for v$env:VERSION"
             git push origin HEAD:main
           }
           $targetSha = (git rev-parse HEAD).Trim()
