@@ -332,7 +332,8 @@ fn validate(config: &TestConfig) -> Result<(), String> {
         return Err("Supported methods are GET and POST.".into());
     }
     if !config.backend_id_header.trim().is_empty()
-        && reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes()).is_err()
+        && reqwest::header::HeaderName::from_bytes(config.backend_id_header.trim().as_bytes())
+            .is_err()
     {
         return Err("Backend identity header name is invalid.".into());
     }
@@ -421,7 +422,14 @@ fn extract_backend_id(
 async fn execute_request(
     client: &Client,
     spec: &RequestSpec,
-) -> (u16, usize, bool, Option<String>, Option<String>, Option<String>) {
+) -> (
+    u16,
+    usize,
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     let mut request = client.request(spec.method.clone(), &spec.url);
     if spec.method == Method::POST {
         request = request
@@ -432,15 +440,19 @@ async fn execute_request(
     match request.send().await {
         Ok(mut response) => {
             let status = response.status().as_u16();
-            let http_version = Some(match response.version() {
-                reqwest::Version::HTTP_09 => "HTTP/0.9",
-                reqwest::Version::HTTP_10 => "HTTP/1.0",
-                reqwest::Version::HTTP_11 => "HTTP/1.1",
-                reqwest::Version::HTTP_2 => "HTTP/2",
-                reqwest::Version::HTTP_3 => "HTTP/3",
-                _ => "Unknown",
-            }.to_string());
-            let backend_id = extract_backend_id(response.headers(), spec.backend_id_header.as_ref());
+            let http_version = Some(
+                match response.version() {
+                    reqwest::Version::HTTP_09 => "HTTP/0.9",
+                    reqwest::Version::HTTP_10 => "HTTP/1.0",
+                    reqwest::Version::HTTP_11 => "HTTP/1.1",
+                    reqwest::Version::HTTP_2 => "HTTP/2",
+                    reqwest::Version::HTTP_3 => "HTTP/3",
+                    _ => "Unknown",
+                }
+                .to_string(),
+            );
+            let backend_id =
+                extract_backend_id(response.headers(), spec.backend_id_header.as_ref());
             let mut count = 0usize;
             let mut read_error = None;
 
@@ -463,9 +475,23 @@ async fn execute_request(
             }
 
             let ok = (200..300).contains(&status) && read_error.is_none();
-            (status, count.min(MAX_RESPONSE_BYTES), ok, read_error, backend_id, http_version)
+            (
+                status,
+                count.min(MAX_RESPONSE_BYTES),
+                ok,
+                read_error,
+                backend_id,
+                http_version,
+            )
         }
-        Err(error) => (0, 0, false, Some(describe_reqwest_error(&error)), None, None),
+        Err(error) => (
+            0,
+            0,
+            false,
+            Some(describe_reqwest_error(&error)),
+            None,
+            None,
+        ),
     }
 }
 
@@ -561,8 +587,8 @@ fn spawn_hardware_monitor(
         .name("redpulse-hardware-monitor".into())
         .spawn(move || {
             use sysinfo::{
-                CpuRefreshKind, MemoryRefreshKind, Networks, ProcessRefreshKind,
-                ProcessesToUpdate, RefreshKind, System,
+                CpuRefreshKind, MemoryRefreshKind, Networks, ProcessRefreshKind, ProcessesToUpdate,
+                RefreshKind, System,
             };
 
             let Ok(pid) = sysinfo::get_current_pid() else {
@@ -624,11 +650,7 @@ fn spawn_hardware_monitor(
                 let sample = HardwareSample {
                     elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
                     logical_cores,
-                    system_cpu_percent: system
-                        .cpus()
-                        .iter()
-                        .map(|cpu| cpu.usage())
-                        .sum::<f32>()
+                    system_cpu_percent: system.cpus().iter().map(|cpu| cpu.usage()).sum::<f32>()
                         / logical_cores as f32,
                     process_cpu_percent: process.map(|process| process.cpu_usage()).unwrap_or(0.0),
                     system_memory_used_bytes: system.used_memory(),
@@ -1025,9 +1047,15 @@ mod tests {
     #[test]
     fn backend_identity_header_is_case_insensitive_and_trimmed() {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("x-backend-id", reqwest::header::HeaderValue::from_static("  node-a  "));
+        headers.insert(
+            "x-backend-id",
+            reqwest::header::HeaderValue::from_static("  node-a  "),
+        );
         let name = reqwest::header::HeaderName::from_static("x-backend-id");
-        assert_eq!(extract_backend_id(&headers, Some(&name)), Some("node-a".into()));
+        assert_eq!(
+            extract_backend_id(&headers, Some(&name)),
+            Some("node-a".into())
+        );
         assert_eq!(extract_backend_id(&headers, None), None);
     }
 

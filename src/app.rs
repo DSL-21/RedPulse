@@ -304,7 +304,10 @@ impl RedPulseApp {
             *self.origin_request_counts.entry(ip.clone()).or_default() += 1;
         }
         if let Some(backend_id) = sample.backend_id.as_ref() {
-            *self.backend_request_counts.entry(backend_id.clone()).or_default() += 1;
+            *self
+                .backend_request_counts
+                .entry(backend_id.clone())
+                .or_default() += 1;
         }
         match classify_status(sample.status) {
             ResponseClass::Success => self.total_success += 1,
@@ -633,7 +636,12 @@ impl RedPulseApp {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label("Backend identity header");
-            ui.add_enabled(self.running.is_none(), egui::TextEdit::singleline(&mut self.backend_id_header).hint_text("x-backend-id").desired_width(220.0));
+            ui.add_enabled(
+                self.running.is_none(),
+                egui::TextEdit::singleline(&mut self.backend_id_header)
+                    .hint_text("x-backend-id")
+                    .desired_width(220.0),
+            );
         });
         ui.label(egui::RichText::new("Optional response header used to identify the actual application backend (for example X-Backend-ID). Leave blank to disable backend attribution.").small().color(egui::Color32::from_rgb(137, 157, 181)));
         ui.label(
@@ -863,27 +871,34 @@ impl RedPulseApp {
                 Self::metric_card(
                     &mut columns[2],
                     "PROCESS RAM",
-                    process_memory_mb.map(|value| format!("{value:.1}")).unwrap_or_else(|| "N/A".into()),
+                    process_memory_mb
+                        .map(|value| format!("{value:.1}"))
+                        .unwrap_or_else(|| "N/A".into()),
                     "MB",
                 );
                 Self::metric_card(
                     &mut columns[3],
                     "NETWORK RX",
-                    format!("{:.2}", hardware.network_rx_bytes_per_sec as f64 / 1_048_576.0),
+                    format!(
+                        "{:.2}",
+                        hardware.network_rx_bytes_per_sec as f64 / 1_048_576.0
+                    ),
                     "MB/s",
                 );
                 Self::metric_card(
                     &mut columns[4],
                     "NETWORK TX",
-                    format!("{:.2}", hardware.network_tx_bytes_per_sec as f64 / 1_048_576.0),
+                    format!(
+                        "{:.2}",
+                        hardware.network_tx_bytes_per_sec as f64 / 1_048_576.0
+                    ),
                     "MB/s",
                 );
             });
             let host_memory_percent = if hardware.system_memory_total_bytes == 0 {
                 0.0
             } else {
-                hardware.system_memory_used_bytes as f64
-                    / hardware.system_memory_total_bytes as f64
+                hardware.system_memory_used_bytes as f64 / hardware.system_memory_total_bytes as f64
                     * 100.0
             };
             let process_cpu_capacity = (hardware.process_cpu_percent
@@ -912,8 +927,7 @@ impl RedPulseApp {
                 .map(|sample| {
                     [
                         sample.elapsed_ms as f64 / 1000.0,
-                        (sample.process_cpu_percent
-                            / (sample.logical_cores.max(1) as f32 * 100.0)
+                        (sample.process_cpu_percent / (sample.logical_cores.max(1) as f32 * 100.0)
                             * 100.0) as f64,
                     ]
                 })
@@ -940,14 +954,8 @@ impl RedPulseApp {
                 .include_y(0.0)
                 .include_y(100.0)
                 .show(ui, |plot_ui| {
-                    plot_ui.line(
-                        Line::new("RedPulse process capacity", cpu_points)
-                            .width(1.8_f32),
-                    );
-                    plot_ui.line(
-                        Line::new("Whole host", host_points)
-                            .width(1.4_f32),
-                    );
+                    plot_ui.line(Line::new("RedPulse process capacity", cpu_points).width(1.8_f32));
+                    plot_ui.line(Line::new("Whole host", host_points).width(1.4_f32));
                 });
         } else {
             ui.label("Hardware telemetry is sampled once per second while a test is running.");
@@ -973,7 +981,11 @@ impl RedPulseApp {
             ui.heading("Backend distribution");
             let total: u64 = self.backend_request_counts.values().sum();
             for (backend, requests) in &self.backend_request_counts {
-                let share = if total == 0 { 0.0 } else { *requests as f64 * 100.0 / total as f64 };
+                let share = if total == 0 {
+                    0.0
+                } else {
+                    *requests as f64 * 100.0 / total as f64
+                };
                 ui.label(format!("{backend}  ·  {requests} requests  ·  {share:.1}%"));
             }
             ui.label(egui::RichText::new(format!("Identified {total} of {} completed responses. Responses without the configured header are not attributed to a backend.", self.total_received)).small().color(egui::Color32::from_rgb(137, 157, 181)));
@@ -1129,7 +1141,11 @@ impl RedPulseApp {
             ui.heading("Backend distribution");
             let total: u64 = self.backend_request_counts.values().sum();
             for (backend, requests) in &self.backend_request_counts {
-                let share = if total == 0 { 0.0 } else { *requests as f64 * 100.0 / total as f64 };
+                let share = if total == 0 {
+                    0.0
+                } else {
+                    *requests as f64 * 100.0 / total as f64
+                };
                 ui.label(format!("{backend}: {requests} requests ({share:.1}%)"));
             }
         }
