@@ -606,8 +606,12 @@ impl RedPulseApp {
                     .color(egui::Color32::from_rgb(130, 151, 176)),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (color, status) = if self.running.is_some() {
-                    (egui::Color32::from_rgb(73, 205, 145), "RUNNING")
+                let (color, status) = if self.running.is_some() && self.recon.is_running() {
+                    (egui::Color32::from_rgb(73, 205, 145), "LOAD + RECON")
+                } else if self.running.is_some() {
+                    (egui::Color32::from_rgb(73, 205, 145), "LOAD RUNNING")
+                } else if self.recon.is_running() {
+                    (egui::Color32::from_rgb(73, 205, 145), "RECON RUNNING")
                 } else if self.status == "Starting" {
                     (egui::Color32::from_rgb(105, 174, 238), "STARTING")
                 } else if self.status == "Completed" {
@@ -1032,8 +1036,7 @@ impl RedPulseApp {
                 .x_axis_label("Test time (s)")
                 .y_axis_label("RedPulse CPU (% of PC)")
                 .include_y(0.0)
-                .include_y(100.0)
-                .show(ui, |plot_ui| {
+                                .show(ui, |plot_ui| {
                     plot_ui.line(
                         Line::new("RedPulse CPU", cpu_points)
                             .color(egui::Color32::from_rgb(83, 183, 246))
@@ -1089,9 +1092,8 @@ impl RedPulseApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(format!(
-                        "{} samples · {} plotted",
-                        self.recent_latencies.len(),
-                        downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).len()
+                        "{} measured responses",
+                        self.recent_latencies.len()
                     ))
                     .small()
                     .color(egui::Color32::from_rgb(135, 153, 176)),
