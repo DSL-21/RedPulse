@@ -2,6 +2,16 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.5.2] - 2026-11-25
+
+### Improved
+- Added visible color legends and live readings for both CPU chart lines.
+- Added visible labels and current values for individual response times, P50 median, and P95 percentile.
+- Explained P50 and P95 in plain language directly in Traffic Lab.
+- Clarified that percentile lines summarize HTTP responses observed during the current run; they are not configured thresholds, and transport errors/timeouts are excluded.
+- Applied explicit CPU chart line colors so their meanings stay consistent with the labels.
+
+
 ## [0.5.1] - 2026-11-25
 
 ### Improved
