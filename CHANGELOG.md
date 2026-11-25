@@ -2,6 +2,15 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.5.1] - 2026-11-25
+
+### Improved
+- Replaced drag-based numeric controls in Traffic Lab with directly editable text fields for workers, duration, arrival rate, timeout, and request budget.
+- Preserved the existing valid defaults: 5 workers, 30 seconds, 5 requests/second, 10-second timeout, and 10,000 requests.
+- Added explicit numeric parsing and clear errors for empty or invalid values; no artificial slider ceiling is imposed by the UI.
+- Kept runtime and platform validation in place so values that cannot be safely represented or queued are rejected before a run starts.
+
+
 ## [0.5.0] - 2026-11-24
 
 ### Added
