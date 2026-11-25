@@ -271,7 +271,11 @@ impl RedPulseApp {
             Ok::<_, String>((
                 parse_numeric_input::<usize>(&self.workers_input, "Workers")?,
                 parse_numeric_input::<u64>(&self.duration_input, "Duration")?,
-                parse_numeric_input::<u64>(&self.rps_input, "Arrival rate")?,
+                if self.load_model == LoadModel::ConstantArrivalRate {
+                    parse_numeric_input::<u64>(&self.rps_input, "Arrival rate")?
+                } else {
+                    self.rps
+                },
                 parse_numeric_input::<u64>(&self.timeout_input, "Timeout")?,
                 parse_numeric_input::<u64>(&self.max_requests_input, "Request budget")?,
             ))
