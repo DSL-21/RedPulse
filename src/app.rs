@@ -1514,9 +1514,29 @@ impl eframe::App for RedPulseApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        LoadModel, RedPulseApp, normalized_process_cpu_percent, parse_arrival_rate_input,
-        parse_numeric_input,
+        DistributionMetrics, LoadModel, RedPulseApp, TestProfile,
+        normalized_process_cpu_percent, parse_arrival_rate_input, parse_numeric_input,
     };
+
+    #[test]
+    fn distribution_metrics_track_requests_errors_and_response_latency() {
+        let mut metrics = DistributionMetrics::default();
+        metrics.record(200, 10.0);
+        metrics.record(503, 20.0);
+        metrics.record(0, 0.0);
+
+        assert_eq!(metrics.requests, 3);
+        assert_eq!(metrics.errors, 1);
+        assert_eq!(metrics.latency_samples, 2);
+        assert_eq!(metrics.average_latency_ms(), Some(15.0));
+    }
+
+    #[test]
+    fn test_profiles_have_clear_distinct_purposes() {
+        assert_ne!(TestProfile::Performance.description(), TestProfile::LoadBalancer.description());
+        assert_ne!(TestProfile::LoadBalancer.description(), TestProfile::Protection.description());
+        assert_eq!(TestProfile::LoadBalancer.label(), "Load Balancer");
+    }
 
     #[test]
     fn process_cpu_percentage_is_normalized_to_total_pc_capacity() {
