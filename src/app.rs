@@ -25,6 +25,57 @@ enum Tab {
     About,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TestProfile {
+    #[default]
+    Performance,
+    LoadBalancer,
+    Protection,
+}
+
+impl TestProfile {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Performance => "Performance",
+            Self::LoadBalancer => "Load Balancer",
+            Self::Protection => "Protection",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Performance => "Measure HTTP throughput, latency and generator headroom.",
+            Self::LoadBalancer => "Distribute requests across resolved IPs and compare observed backend responses.",
+            Self::Protection => "Run a controlled HTTP test and record access-denied, rate-limit and service-protection responses.",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct DistributionMetrics {
+    requests: u64,
+    errors: u64,
+    latency_total_ms: f64,
+    latency_samples: u64,
+}
+
+impl DistributionMetrics {
+    fn record(&mut self, status: u16, latency_ms: f64) {
+        self.requests = self.requests.saturating_add(1);
+        if status >= 400 {
+            self.errors = self.errors.saturating_add(1);
+        }
+        if status != 0 && latency_ms.is_finite() && latency_ms >= 0.0 {
+            self.latency_total_ms += latency_ms;
+            self.latency_samples = self.latency_samples.saturating_add(1);
+        }
+    }
+
+    fn average_latency_ms(&self) -> Option<f64> {
+        (self.latency_samples > 0).then(|| self.latency_total_ms / self.latency_samples as f64)
+    }
+}
+
 const MAX_UI_SAMPLES: usize = 10_000;
 const MAX_PLOT_POINTS: usize = 2_000;
 const MAX_HARDWARE_SAMPLES: usize = 3_600;
@@ -132,6 +183,7 @@ fn classify_status(status: u16) -> ResponseClass {
 
 #[derive(Clone)]
 struct RunSnapshot {
+    profile: TestProfile,
     target: String,
     method: String,
     load_model: LoadModel,
@@ -148,6 +200,7 @@ struct RunSnapshot {
 
 pub struct RedPulseApp {
     tab: Tab,
+    profile: TestProfile,
     recon: ReconState,
     target: String,
     method: String,
@@ -170,8 +223,8 @@ pub struct RedPulseApp {
     recent_latencies: VecDeque<(f64, f64)>,
     hardware_samples: VecDeque<HardwareSample>,
     resolved_addresses: Vec<String>,
-    origin_request_counts: BTreeMap<String, u64>,
-    backend_request_counts: BTreeMap<String, u64>,
+    origin_metrics: BTreeMap<String, DistributionMetrics>,
+    backend_metrics: BTreeMap<String, DistributionMetrics>,
     started: Option<Instant>,
     elapsed_seconds: f64,
     status: String,
@@ -182,6 +235,10 @@ pub struct RedPulseApp {
     total_redirects: u64,
     total_http_4xx: u64,
     total_http_5xx: u64,
+    total_unauthorized: u64,
+    total_forbidden: u64,
+    total_rate_limited: u64,
+    total_unavailable: u64,
     total_network_errors: u64,
     engine_stats: EngineStats,
     http_response_count: u64,
@@ -218,6 +275,7 @@ impl RedPulseApp {
 
         Self {
             tab: Tab::Tester,
+            profile: TestProfile::Performance,
             recon: ReconState::new(),
             target: "https://example.com/".into(),
             method: "GET".into(),
@@ -240,8 +298,8 @@ impl RedPulseApp {
             recent_latencies: VecDeque::new(),
             hardware_samples: VecDeque::new(),
             resolved_addresses: Vec::new(),
-            origin_request_counts: BTreeMap::new(),
-            backend_request_counts: BTreeMap::new(),
+            origin_metrics: BTreeMap::new(),
+            backend_metrics: BTreeMap::new(),
             started: None,
             elapsed_seconds: 0.0,
             status: "Ready".into(),
@@ -252,6 +310,10 @@ impl RedPulseApp {
             total_redirects: 0,
             total_http_4xx: 0,
             total_http_5xx: 0,
+            total_unauthorized: 0,
+            total_forbidden: 0,
+            total_rate_limited: 0,
+            total_unavailable: 0,
             total_network_errors: 0,
             engine_stats: EngineStats::default(),
             http_response_count: 0,
@@ -263,18 +325,40 @@ impl RedPulseApp {
         }
     }
 
+    fn apply_profile_defaults(&mut self) {
+        match self.profile {
+            TestProfile::Performance => {
+                self.dns_strategy = DnsStrategy::System;
+            }
+            TestProfile::LoadBalancer => {
+                self.dns_strategy = DnsStrategy::RoundRobin;
+                if self.backend_id_header.trim().is_empty() {
+                    self.backend_id_header = "x-backend-id".into();
+                }
+            }
+            TestProfile::Protection => {
+                self.dns_strategy = DnsStrategy::System;
+                self.method = "GET".into();
+            }
+        }
+    }
+
     fn reset_results(&mut self) {
         self.samples.clear();
         self.recent_latencies.clear();
         self.hardware_samples.clear();
         self.resolved_addresses.clear();
-        self.origin_request_counts.clear();
-        self.backend_request_counts.clear();
+        self.origin_metrics.clear();
+        self.backend_metrics.clear();
         self.total_received = 0;
         self.total_success = 0;
         self.total_redirects = 0;
         self.total_http_4xx = 0;
         self.total_http_5xx = 0;
+        self.total_unauthorized = 0;
+        self.total_forbidden = 0;
+        self.total_rate_limited = 0;
+        self.total_unavailable = 0;
         self.total_network_errors = 0;
         self.engine_stats = EngineStats::default();
         self.http_response_count = 0;
@@ -330,6 +414,7 @@ impl RedPulseApp {
         };
 
         let snapshot = RunSnapshot {
+            profile: self.profile,
             target: config.url.clone(),
             method: config.method.clone(),
             workers: config.workers,
@@ -366,13 +451,16 @@ impl RedPulseApp {
     fn record_sample(&mut self, sample: Sample) {
         self.total_received += 1;
         if let Some(ip) = sample.endpoint_ip.as_ref() {
-            *self.origin_request_counts.entry(ip.clone()).or_default() += 1;
+            self.origin_metrics
+                .entry(ip.clone())
+                .or_default()
+                .record(sample.status, sample.latency_ms);
         }
         if let Some(backend_id) = sample.backend_id.as_ref() {
-            *self
-                .backend_request_counts
+            self.backend_metrics
                 .entry(backend_id.clone())
-                .or_default() += 1;
+                .or_default()
+                .record(sample.status, sample.latency_ms);
         }
         match classify_status(sample.status) {
             ResponseClass::Success => self.total_success += 1,
@@ -381,6 +469,13 @@ impl RedPulseApp {
             ResponseClass::ServerError => self.total_http_5xx += 1,
             ResponseClass::NetworkError => self.total_network_errors += 1,
             ResponseClass::Other => {}
+        }
+        match sample.status {
+            401 => self.total_unauthorized += 1,
+            403 => self.total_forbidden += 1,
+            429 => self.total_rate_limited += 1,
+            503 => self.total_unavailable += 1,
+            _ => {}
         }
 
         // Response-time statistics describe actual HTTP responses only.
@@ -664,185 +759,160 @@ impl RedPulseApp {
                 .desired_width(f32::INFINITY),
         );
 
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("Load model");
-            egui::ComboBox::from_id_salt("load_model")
-                .selected_text(self.load_model.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.load_model,
-                        LoadModel::ConstantArrivalRate,
-                        "Constant Arrival Rate",
-                    );
-                    ui.selectable_value(&mut self.load_model, LoadModel::ClosedLoop, "Closed Loop");
-                });
-            ui.label(
-                egui::RichText::new(self.load_model.description())
-                    .small()
-                    .color(egui::Color32::from_rgb(137, 157, 181)),
-            );
+        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            let mut selected_profile = self.profile;
+            let mut changed = false;
+            changed |= ui.selectable_value(&mut selected_profile, TestProfile::Performance, "Performance").changed();
+            changed |= ui.selectable_value(&mut selected_profile, TestProfile::LoadBalancer, "Load Balancer").changed();
+            changed |= ui.selectable_value(&mut selected_profile, TestProfile::Protection, "Protection").changed();
+            if changed && self.running.is_none() {
+                self.profile = selected_profile;
+                self.apply_profile_defaults();
+            }
         });
-
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("DNS routing");
-            egui::ComboBox::from_id_salt("dns_strategy")
-                .selected_text(self.dns_strategy.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.dns_strategy,
-                        DnsStrategy::System,
-                        DnsStrategy::System.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.dns_strategy,
-                        DnsStrategy::RoundRobin,
-                        DnsStrategy::RoundRobin.label(),
-                    );
-                });
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("Backend identity header");
-            ui.add_enabled(
-                self.running.is_none(),
-                egui::TextEdit::singleline(&mut self.backend_id_header)
-                    .hint_text("x-backend-id")
-                    .desired_width(220.0),
-            );
-        });
-        ui.label(egui::RichText::new("Optional response header used to identify the actual application backend (for example X-Backend-ID). Leave blank to disable backend attribution.").small().color(egui::Color32::from_rgb(137, 157, 181)));
         ui.label(
-            egui::RichText::new(self.dns_strategy.description())
+            egui::RichText::new(self.profile.description())
                 .small()
                 .color(egui::Color32::from_rgb(137, 157, 181)),
         );
-        if self.dns_strategy == DnsStrategy::RoundRobin {
-            ui.label(
-                egui::RichText::new(
-                    "Pinned mode opens direct connections to resolved IPs and keeps the URL hostname for HTTP Host and TLS SNI. System proxy settings are bypassed.",
-                )
-                .small()
-                .color(egui::Color32::from_rgb(137, 157, 181)),
-            );
-        }
-
         ui.add_space(8.0);
+        ui.heading("Target");
+        ui.add_enabled(
+            self.running.is_none(),
+            egui::TextEdit::singleline(&mut self.target)
+                .hint_text("https://your-authorized-target.example")
+                .desired_width(f32::INFINITY),
+        );
+
+        ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            ui.vertical(|ui| {
-                ui.label("Method");
-                egui::ComboBox::from_id_salt("method")
-                    .selected_text(&self.method)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.method, "GET".into(), "GET");
-                        ui.selectable_value(&mut self.method, "POST".into(), "POST");
-                    });
-            });
             ui.vertical(|ui| {
                 ui.label("Workers");
                 ui.add_enabled(
                     self.running.is_none(),
                     egui::TextEdit::singleline(&mut self.workers_input)
-                        .desired_width(105.0)
+                        .desired_width(92.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(
-                    egui::RichText::new("concurrent")
-                        .small()
-                        .color(egui::Color32::from_rgb(137, 157, 181)),
-                );
+                ui.label(egui::RichText::new("concurrent").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
             ui.vertical(|ui| {
                 ui.label("Duration");
                 ui.add_enabled(
                     self.running.is_none(),
                     egui::TextEdit::singleline(&mut self.duration_input)
-                        .desired_width(88.0)
+                        .desired_width(92.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(
-                    egui::RichText::new("seconds")
-                        .small()
-                        .color(egui::Color32::from_rgb(137, 157, 181)),
-                );
+                ui.label(egui::RichText::new("seconds").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
             ui.vertical(|ui| {
                 ui.label("Arrival rate");
                 ui.add_enabled(
                     self.running.is_none() && self.load_model == LoadModel::ConstantArrivalRate,
                     egui::TextEdit::singleline(&mut self.rps_input)
-                        .desired_width(105.0)
+                        .desired_width(92.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(
-                    egui::RichText::new("req/s")
-                        .small()
-                        .color(egui::Color32::from_rgb(137, 157, 181)),
-                );
+                ui.label(egui::RichText::new("req/s").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
-            ui.vertical(|ui| {
-                ui.label("Timeout");
-                ui.add_enabled(
-                    self.running.is_none(),
-                    egui::TextEdit::singleline(&mut self.timeout_input)
-                        .desired_width(88.0)
-                        .font(egui::TextStyle::Monospace),
-                );
-                ui.label(
-                    egui::RichText::new("seconds")
-                        .small()
-                        .color(egui::Color32::from_rgb(137, 157, 181)),
-                );
-            });
-        });
-
-        if self.load_model == LoadModel::ClosedLoop {
-            ui.label(
-                egui::RichText::new(
-                    "Closed Loop uses worker count as the concurrency limit; arrival rate is not used.",
-                )
-                .small()
-                .color(egui::Color32::from_rgb(137, 157, 181)),
-            );
-        }
-
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label("Request budget");
                 ui.add_enabled(
                     self.running.is_none(),
                     egui::TextEdit::singleline(&mut self.max_requests_input)
-                        .desired_width(150.0)
+                        .desired_width(125.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(
-                    egui::RichText::new("total requests")
-                        .small()
-                        .color(egui::Color32::from_rgb(137, 157, 181)),
-                );
+                ui.label(egui::RichText::new("total requests").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
         });
+
+        egui::CollapsingHeader::new("Advanced settings")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Load model");
+                    egui::ComboBox::from_id_salt("load_model")
+                        .selected_text(self.load_model.label())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.load_model, LoadModel::ConstantArrivalRate, "Constant Arrival Rate");
+                            ui.selectable_value(&mut self.load_model, LoadModel::ClosedLoop, "Closed Loop");
+                        });
+                });
+                ui.label(egui::RichText::new(self.load_model.description()).small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.horizontal(|ui| {
+                    ui.label("Method");
+                    egui::ComboBox::from_id_salt("method")
+                        .selected_text(&self.method)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.method, "GET".into(), "GET");
+                            ui.selectable_value(&mut self.method, "POST".into(), "POST");
+                        });
+                    ui.label("Timeout");
+                    ui.add_enabled(
+                        self.running.is_none(),
+                        egui::TextEdit::singleline(&mut self.timeout_input)
+                            .desired_width(70.0)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    ui.label("seconds");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("DNS routing");
+                    egui::ComboBox::from_id_salt("dns_strategy")
+                        .selected_text(self.dns_strategy.label())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.dns_strategy, DnsStrategy::System, DnsStrategy::System.label());
+                            ui.selectable_value(&mut self.dns_strategy, DnsStrategy::RoundRobin, DnsStrategy::RoundRobin.label());
+                        });
+                });
+                if self.profile == TestProfile::LoadBalancer {
+                    ui.label(
+                        egui::RichText::new(
+                            "Round-robin pins requests to resolved destination IPs. This is not source-IP rotation and does not reveal private backends by itself.",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                    );
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Backend ID response header");
+                    ui.add_enabled(
+                        self.running.is_none(),
+                        egui::TextEdit::singleline(&mut self.backend_id_header)
+                            .hint_text("x-backend-id")
+                            .desired_width(180.0),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "Optional: expose a stable backend identifier in responses on your own test environment to measure real backend distribution.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
+                if self.method == "POST" {
+                    ui.add_space(6.0);
+                    ui.label("JSON request body");
+                    ui.add_enabled(
+                        self.running.is_none(),
+                        egui::TextEdit::multiline(&mut self.body)
+                            .desired_rows(4)
+                            .desired_width(f32::INFINITY),
+                    );
+                }
+            });
+
         ui.label(
             egui::RichText::new(format!(
-                "Direct numeric input without a slider-imposed ceiling. Accepted values depend on integer range and available OS/runtime resources. The request budget caps each run. POST JSON is bounded to {} KiB; response measurement to 2 MiB.",
+                "The request budget caps the run. POST JSON is limited to {} KiB; measured response bodies to 2 MiB.",
                 MAX_REQUEST_BODY_BYTES / 1024
             ))
             .small()
             .color(egui::Color32::from_rgb(137, 157, 181)),
         );
-
-        if self.method == "POST" {
-            ui.add_space(8.0);
-            ui.label("JSON request body");
-            ui.add_enabled(
-                self.running.is_none(),
-                egui::TextEdit::multiline(&mut self.body)
-                    .desired_rows(4)
-                    .desired_width(f32::INFINITY),
-            );
-        }
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
@@ -926,6 +996,23 @@ impl RedPulseApp {
                 .small()
                 .color(egui::Color32::from_rgb(135, 153, 176)),
         );
+        if self.profile == TestProfile::Protection {
+            ui.add_space(8.0);
+            ui.heading("Protection responses");
+            ui.columns(4, |columns| {
+                Self::metric_card(&mut columns[0], "401 UNAUTHORIZED", self.total_unauthorized, "");
+                Self::metric_card(&mut columns[1], "403 FORBIDDEN", self.total_forbidden, "");
+                Self::metric_card(&mut columns[2], "429 RATE LIMITED", self.total_rate_limited, "");
+                Self::metric_card(&mut columns[3], "503 UNAVAILABLE", self.total_unavailable, "");
+            });
+            ui.label(
+                egui::RichText::new(
+                    "These are observed HTTP statuses, not proof of a specific WAF rule. Interpret them with server-side security logs.",
+                )
+                .small()
+                .color(egui::Color32::from_rgb(137, 157, 181)),
+            );
+        }
 
         ui.label(
             egui::RichText::new(format!(
@@ -1046,35 +1133,45 @@ impl RedPulseApp {
         } else {
             ui.label("CPU and network telemetry appears after the first half-second sample.");
         }
-        if self.dns_strategy == DnsStrategy::RoundRobin {
+        if self.dns_strategy == DnsStrategy::RoundRobin || self.profile == TestProfile::LoadBalancer {
             ui.add_space(8.0);
-            ui.heading("DNS origin distribution");
+            ui.heading("Destination IP distribution");
             if self.resolved_addresses.is_empty() {
                 ui.label("Resolving target addresses…");
             } else {
+                let total: u64 = self.origin_metrics.values().map(|metric| metric.requests).sum();
                 for address in &self.resolved_addresses {
-                    let requests = self
-                        .origin_request_counts
-                        .get(address)
-                        .copied()
-                        .unwrap_or(0);
-                    ui.label(format!("{address}  ·  {requests} requests"));
+                    let metric = self.origin_metrics.get(address).cloned().unwrap_or_default();
+                    let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
+                    let average = metric.average_latency_ms().map(|value| format!("{value:.1} ms")).unwrap_or_else(|| "—".into());
+                    ui.label(format!("{address}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} HTTP errors", metric.requests, metric.errors));
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "These are destination IPs returned by DNS and selected by RedPulse. CDN anycast addresses do not necessarily represent separate origin servers.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
+                if self.resolved_addresses.len() <= 1 {
+                    ui.colored_label(egui::Color32::from_rgb(238, 178, 82), "Only one destination IP was resolved; this run cannot compare Multi-IP distribution.");
                 }
             }
         }
-        if !self.backend_request_counts.is_empty() {
+        if !self.backend_metrics.is_empty() {
             ui.add_space(8.0);
             ui.heading("Backend distribution");
-            let total: u64 = self.backend_request_counts.values().sum();
-            for (backend, requests) in &self.backend_request_counts {
-                let share = if total == 0 {
-                    0.0
-                } else {
-                    *requests as f64 * 100.0 / total as f64
-                };
-                ui.label(format!("{backend}  ·  {requests} requests  ·  {share:.1}%"));
+            let total: u64 = self.backend_metrics.values().map(|metric| metric.requests).sum();
+            for (backend, metric) in &self.backend_metrics {
+                let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
+                let average = metric.average_latency_ms().map(|value| format!("{value:.1} ms")).unwrap_or_else(|| "—".into());
+                ui.label(format!("{backend}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} HTTP errors", metric.requests, metric.errors));
             }
-            ui.label(egui::RichText::new(format!("Identified {total} of {} completed responses. Responses without the configured header are not attributed to a backend.", self.total_received)).small().color(egui::Color32::from_rgb(137, 157, 181)));
+            ui.label(egui::RichText::new(format!("Identified {total} of {} completed responses. The configured response header must be emitted by your backend; the edge IP alone does not identify an origin node.", self.total_received)).small().color(egui::Color32::from_rgb(137, 157, 181)));
+        } else if self.profile == TestProfile::LoadBalancer && self.total_received > 0 {
+            ui.add_space(8.0);
+            ui.heading("Backend distribution");
+            ui.label("No backend ID was observed. IP routing was measured, but private backend distribution cannot be confirmed without a stable response header such as X-Backend-ID.");
         }
         if self.engine_stats.limit_reached {
             ui.colored_label(
@@ -1185,7 +1282,8 @@ impl RedPulseApp {
                         .map(|rate| format!("{rate} req/s arrival target"))
                         .unwrap_or_else(|| "throughput determined by workers".into());
                     ui.label(format!(
-                        "{} · {} · {} · {} workers · {} s configured · {} · {} request budget · {} s timeout · {:.3} s measured · backend header {}",
+                        "{} profile · {} · {} · {} · {} workers · {} s configured · {} · {} request budget · {} s timeout · {:.3} s measured · backend header {}",
+                        run.profile.label(),
                         run.method,
                         run.load_model.label(),
                         run.dns_strategy.label(),
@@ -1226,16 +1324,30 @@ impl RedPulseApp {
             self.total_http_5xx,
             self.total_network_errors
         ));
-        if !self.backend_request_counts.is_empty() {
+        if self.profile == TestProfile::Protection && self.last_run.is_some() {
+            ui.label(format!(
+                "Protection status counts: 401 {} · 403 {} · 429 {} · 503 {}",
+                self.total_unauthorized,
+                self.total_forbidden,
+                self.total_rate_limited,
+                self.total_unavailable
+            ));
+        }
+        if !self.backend_metrics.is_empty() {
             ui.heading("Backend distribution");
-            let total: u64 = self.backend_request_counts.values().sum();
-            for (backend, requests) in &self.backend_request_counts {
-                let share = if total == 0 {
-                    0.0
-                } else {
-                    *requests as f64 * 100.0 / total as f64
-                };
-                ui.label(format!("{backend}: {requests} requests ({share:.1}%)"));
+            let total: u64 = self.backend_metrics.values().map(|metric| metric.requests).sum();
+            for (backend, metric) in &self.backend_metrics {
+                let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
+                ui.label(format!("{backend}: {} requests ({share:.1}%) · {} HTTP errors", metric.requests, metric.errors));
+            }
+        }
+        if self.dns_strategy == DnsStrategy::RoundRobin {
+            let total: u64 = self.origin_metrics.values().map(|metric| metric.requests).sum();
+            ui.heading("Destination IP distribution");
+            for address in &self.resolved_addresses {
+                let metric = self.origin_metrics.get(address).cloned().unwrap_or_default();
+                let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
+                ui.label(format!("{address}: {} requests ({share:.1}%) · {} HTTP errors", metric.requests, metric.errors));
             }
         }
         ui.label(format!(
@@ -1364,7 +1476,7 @@ impl eframe::App for RedPulseApp {
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 if ui
-                    .selectable_label(self.tab == Tab::Recon, "◈  Recon")
+                    .selectable_label(self.tab == Tab::Recon, "◈  Protection")
                     .clicked()
                 {
                     self.tab = Tab::Recon;
