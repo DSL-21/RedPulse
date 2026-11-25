@@ -1370,7 +1370,30 @@ impl eframe::App for RedPulseApp {
 
 #[cfg(test)]
 mod tests {
-    use super::RedPulseApp;
+    use super::{RedPulseApp, parse_numeric_input};
+
+    #[test]
+    fn numeric_text_fields_accept_large_user_supplied_values() {
+        assert_eq!(
+            parse_numeric_input::<usize>(" 4096 ", "Workers"),
+            Ok(4096)
+        );
+        assert_eq!(
+            parse_numeric_input::<u64>("2000000", "Arrival rate"),
+            Ok(2_000_000)
+        );
+        assert_eq!(
+            parse_numeric_input::<u64>("5000000000", "Request budget"),
+            Ok(5_000_000_000)
+        );
+    }
+
+    #[test]
+    fn numeric_text_fields_reject_empty_and_fractional_values() {
+        assert!(parse_numeric_input::<u64>("", "Duration").is_err());
+        assert!(parse_numeric_input::<u64>("3.5", "Timeout").is_err());
+        assert!(parse_numeric_input::<usize>("many", "Workers").is_err());
+    }
 
     #[test]
     fn observed_rps_uses_measured_elapsed_time() {
