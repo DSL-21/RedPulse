@@ -1,8 +1,8 @@
 [package]
 name = "redpulse"
-version = "0.5.3"
+version = "0.6.0"
 edition = "2024"
-description = "High-performance Windows HTTP load testing with Multi-IP routing and hardware telemetry"
+description = "Guided HTTP performance, load-balancer and protection testing in Rust"
 license = "MIT"
 
 [dependencies]
