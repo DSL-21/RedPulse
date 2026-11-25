@@ -652,7 +652,7 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(PROBE_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(concat!("RedPulse/", env!("CARGO_PKG_VERSION"), " Recon"))
+        .user_agent(concat!("RedPulse/", env!("CARGO_PKG_VERSION"), " ProtectionAudit"))
         .build()
         .map_err(|error| format!("Could not create HTTP client: {error}"))?;
 
@@ -711,7 +711,7 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
                     "HTTP surface",
                     "Target returned a redirect",
                     result.note.clone(),
-                    "Review the redirect destination manually; RedPulse does not follow redirects during recon.",
+                    "Review the redirect destination manually; RedPulse does not follow redirects during the protection audit.",
                 );
             }
         }
@@ -836,7 +836,7 @@ fn analyze_probe_results(url: &Url, probes: &[ProbeResult], findings: &mut Vec<F
             Severity::Info,
             "Transport security",
             "HTTPS endpoint observed",
-            "The supplied target uses HTTPS. Certificate-chain details are not inspected by this first recon module.",
+            "The supplied target uses HTTPS. Certificate-chain details are not inspected by this first protection-audit module.",
             "Review certificate validity, hostname coverage, chain and supported protocol versions separately.",
         );
     }
@@ -844,7 +844,7 @@ fn analyze_probe_results(url: &Url, probes: &[ProbeResult], findings: &mut Vec<F
 
 fn render_report(ui: &mut egui::Ui, report: &ReconReport) {
     ui.add_space(14.0);
-    ui.heading("Recon summary");
+    ui.heading("Protection Audit Summary");
 
     ui.columns(3, |columns| {
         metric(
