@@ -27,7 +27,15 @@ enum Tab {
 
 const MAX_UI_SAMPLES: usize = 10_000;
 const MAX_PLOT_POINTS: usize = 2_000;
-const MAX_HARDWARE_SAMPLES: usize = 1_800;
+const MAX_HARDWARE_SAMPLES: usize = 3_600;
+
+fn normalized_process_cpu_percent(process_cpu_percent: f32, logical_cores: usize) -> f32 {
+    if !process_cpu_percent.is_finite() || process_cpu_percent <= 0.0 {
+        return 0.0;
+    }
+
+    (process_cpu_percent / logical_cores.max(1) as f32).clamp(0.0, 100.0)
+}
 
 fn parse_numeric_input<T>(value: &str, field: &str) -> Result<T, String>
 where
@@ -936,6 +944,10 @@ impl RedPulseApp {
             let process_memory_mb = hardware
                 .process_memory_bytes
                 .map(|bytes| bytes as f64 / 1_048_576.0);
+            let process_cpu_capacity = normalized_process_cpu_percent(
+                hardware.process_cpu_percent,
+                hardware.logical_cores,
+            );
             ui.columns(5, |columns| {
                 Self::metric_card(
                     &mut columns[0],
@@ -946,8 +958,8 @@ impl RedPulseApp {
                 Self::metric_card(
                     &mut columns[1],
                     "REDPULSE CPU",
-                    format!("{:.1}", hardware.process_cpu_percent),
-                    "% of one core",
+                    format!("{process_cpu_capacity:.1}"),
+                    "% total capacity",
                 );
                 Self::metric_card(
                     &mut columns[2],
@@ -982,38 +994,12 @@ impl RedPulseApp {
                 hardware.system_memory_used_bytes as f64 / hardware.system_memory_total_bytes as f64
                     * 100.0
             };
-            let process_cpu_capacity = (hardware.process_cpu_percent
-                / (hardware.logical_cores.max(1) as f32 * 100.0)
-                * 100.0)
-                .clamp(0.0, 100.0);
             ui.label(
                 egui::RichText::new(format!(
-                    "Logical cores: {} · Host RAM: {:.1}% used · RedPulse CPU capacity: {:.1}% · Host-wide network counters",
+                    "Logical cores: {} · Host RAM: {:.1}% used · Host CPU is shown above; the graph tracks RedPulse only.",
                     hardware.logical_cores,
-                    host_memory_percent,
-                    process_cpu_capacity
+                    host_memory_percent
                 ))
-                .small()
-                .color(egui::Color32::from_rgb(135, 153, 176)),
-            );
-
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    egui::Color32::from_rgb(235, 104, 112),
-                    format!(
-                        "━ RedPulse process · {:.1}% of total CPU capacity",
-                        process_cpu_capacity
-                    ),
-                );
-                ui.colored_label(
-                    egui::Color32::from_rgb(83, 183, 246),
-                    format!("━ Whole PC CPU · {:.1}%", hardware.system_cpu_percent),
-                );
-            });
-            ui.label(
-                egui::RichText::new(
-                    "The red line is RedPulse's CPU use normalized across all logical cores. The blue line is total host CPU use."
-                )
                 .small()
                 .color(egui::Color32::from_rgb(135, 153, 176)),
             );
@@ -1029,46 +1015,33 @@ impl RedPulseApp {
                 .map(|sample| {
                     [
                         sample.elapsed_ms as f64 / 1000.0,
-                        (sample.process_cpu_percent / (sample.logical_cores.max(1) as f32 * 100.0)
-                            * 100.0) as f64,
-                    ]
-                })
-                .collect();
-            let host_points: PlotPoints = self
-                .hardware_samples
-                .iter()
-                .map(|sample| {
-                    [
-                        sample.elapsed_ms as f64 / 1000.0,
-                        sample.system_cpu_percent as f64,
+                        normalized_process_cpu_percent(
+                            sample.process_cpu_percent,
+                            sample.logical_cores,
+                        ) as f64,
                     ]
                 })
                 .collect();
             Plot::new("hardware_cpu_plot")
-                .height(135.0)
+                .height(110.0)
                 .allow_zoom(false)
                 .allow_scroll(false)
                 .allow_drag(false)
                 .allow_boxed_zoom(false)
                 .allow_double_click_reset(false)
-                .x_axis_label("Elapsed time (s)")
-                .y_axis_label("CPU utilization (%)")
+                .x_axis_label("Test time (s)")
+                .y_axis_label("RedPulse CPU (% of PC)")
                 .include_y(0.0)
                 .include_y(100.0)
                 .show(ui, |plot_ui| {
                     plot_ui.line(
-                        Line::new("RedPulse process", cpu_points)
-                            .color(egui::Color32::from_rgb(235, 104, 112))
-                            .width(1.8_f32),
-                    );
-                    plot_ui.line(
-                        Line::new("Whole PC CPU", host_points)
+                        Line::new("RedPulse CPU", cpu_points)
                             .color(egui::Color32::from_rgb(83, 183, 246))
-                            .width(1.4_f32),
+                            .width(2.0_f32),
                     );
                 });
         } else {
-            ui.label("Hardware telemetry is sampled once per second while a test is running.");
+            ui.label("CPU and network telemetry appears after the first half-second sample.");
         }
         if self.dns_strategy == DnsStrategy::RoundRobin {
             ui.add_space(8.0);
@@ -1126,34 +1099,20 @@ impl RedPulseApp {
             });
         });
 
-        ui.horizontal_wrapped(|ui| {
-            ui.colored_label(
-                egui::Color32::from_rgb(83, 183, 246),
-                "━ Blue: individual response times",
+        if self.http_response_count > 0 {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Typical response (P50): {p50:.1} ms   ·   95% finished within (P95): {p95:.1} ms"
+                ))
+                .strong()
+                .color(egui::Color32::from_rgb(190, 207, 225)),
             );
-            if self.http_response_count > 0 {
-                ui.colored_label(
-                    egui::Color32::from_rgb(76, 195, 142),
-                    format!("━ Green: P50 median · {p50:.1} ms"),
-                );
-                ui.colored_label(
-                    egui::Color32::from_rgb(238, 178, 82),
-                    format!("━ Orange: P95 · {p95:.1} ms"),
-                );
-            } else {
-                ui.label("Percentile lines appear after the first HTTP response.");
-            }
-        });
+        } else {
+            ui.label("Waiting for HTTP response measurements…");
+        }
         ui.label(
             egui::RichText::new(
-                "P50 = half of HTTP responses were this fast or faster. P95 = 95% were this fast or faster; 5% took longer."
-            )
-            .small()
-            .color(egui::Color32::from_rgb(160, 180, 202)),
-        );
-        ui.label(
-            egui::RichText::new(
-                "Percentile lines summarize all HTTP responses in this run so far. They are statistics, not performance limits; network errors and timeouts are excluded."
+                "The single blue line shows each completed HTTP response. P50 and P95 are summaries above, not extra graph lines."
             )
             .small()
             .color(egui::Color32::from_rgb(135, 153, 176)),
@@ -1164,7 +1123,7 @@ impl RedPulseApp {
             ui.label("Waiting for HTTP response samples…");
         } else {
             let plot = Plot::new("latency_plot")
-                .height(205.0)
+                .height(175.0)
                 // Keep the chart fixed: mouse wheel and pointer gestures must
                 // scroll the surrounding dashboard, never alter plot bounds.
                 .allow_zoom(false)
@@ -1172,7 +1131,7 @@ impl RedPulseApp {
                 .allow_drag(false)
                 .allow_boxed_zoom(false)
                 .allow_double_click_reset(false)
-                .x_axis_label("Elapsed time (s)")
+                .x_axis_label("Test time (s)")
                 .y_axis_label("Response latency (ms)")
                 .include_x(0.0)
                 .include_y(0.0);
@@ -1182,21 +1141,7 @@ impl RedPulseApp {
                         .color(egui::Color32::from_rgb(83, 183, 246))
                         .width(2.0_f32),
                 );
-                if self.http_response_count > 0 {
-                    let x_end = self.elapsed_seconds.max(0.01);
-                    let p50_points: PlotPoints = vec![[0.0, p50], [x_end, p50]].into();
-                    let p95_points: PlotPoints = vec![[0.0, p95], [x_end, p95]].into();
-                    plot_ui.line(
-                        Line::new("P50 median", p50_points)
-                            .color(egui::Color32::from_rgb(76, 195, 142))
-                            .width(1.2_f32),
-                    );
-                    plot_ui.line(
-                        Line::new("P95 percentile", p95_points)
-                            .color(egui::Color32::from_rgb(238, 178, 82))
-                            .width(1.2_f32),
-                    );
-                }
+
             });
         }
 
@@ -1401,7 +1346,7 @@ impl eframe::App for RedPulseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_engine();
         if self.running.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(100));
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
 
         egui::TopBottomPanel::top("topbar")
@@ -1464,7 +1409,18 @@ impl eframe::App for RedPulseApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadModel, RedPulseApp, parse_arrival_rate_input, parse_numeric_input};
+    use super::{
+        LoadModel, RedPulseApp, normalized_process_cpu_percent, parse_arrival_rate_input,
+        parse_numeric_input,
+    };
+
+    #[test]
+    fn process_cpu_percentage_is_normalized_to_total_pc_capacity() {
+        assert!((normalized_process_cpu_percent(101.5, 8) - 12.6875).abs() < 0.0001);
+        assert_eq!(normalized_process_cpu_percent(200.0, 0), 100.0);
+        assert_eq!(normalized_process_cpu_percent(f32::NAN, 8), 0.0);
+        assert_eq!(normalized_process_cpu_percent(-5.0, 8), 0.0);
+    }
 
     #[test]
     fn numeric_text_fields_accept_large_user_supplied_values() {
