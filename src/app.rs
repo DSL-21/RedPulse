@@ -29,6 +29,17 @@ const MAX_UI_SAMPLES: usize = 10_000;
 const MAX_PLOT_POINTS: usize = 2_000;
 const MAX_HARDWARE_SAMPLES: usize = 1_800;
 
+fn parse_numeric_input<T>(value: &str, field: &str) -> Result<T, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value
+        .trim()
+        .parse::<T>()
+        .map_err(|error| format!("{field} must be a valid whole number: {error}"))
+}
+
 fn downsample_min_max(points: &VecDeque<(f64, f64)>, max_points: usize) -> Vec<[f64; 2]> {
     let mut sorted: Vec<[f64; 2]> = points.iter().map(|(x, y)| [*x, *y]).collect();
     sorted.sort_by(|left, right| left[0].total_cmp(&right[0]));
@@ -128,6 +139,11 @@ pub struct RedPulseApp {
     rps: u64,
     max_requests: u64,
     timeout: u64,
+    workers_input: String,
+    duration_input: String,
+    rps_input: String,
+    max_requests_input: String,
+    timeout_input: String,
     body: String,
     running: Option<TestHandle>,
     samples: VecDeque<Sample>,
@@ -193,6 +209,11 @@ impl RedPulseApp {
             rps: 5,
             max_requests: DEFAULT_MAX_TOTAL_REQUESTS,
             timeout: 10,
+            workers_input: "5".into(),
+            duration_input: "30".into(),
+            rps_input: "5".into(),
+            max_requests_input: DEFAULT_MAX_TOTAL_REQUESTS.to_string(),
+            timeout_input: "10".into(),
             body: r#"{ "ping": "redpulse" }"#.into(),
             running: None,
             samples: VecDeque::new(),
@@ -246,6 +267,30 @@ impl RedPulseApp {
     }
 
     fn start_test(&mut self) {
+        let parsed = (|| {
+            Ok::<_, String>((
+                parse_numeric_input::<usize>(&self.workers_input, "Workers")?,
+                parse_numeric_input::<u64>(&self.duration_input, "Duration")?,
+                parse_numeric_input::<u64>(&self.rps_input, "Arrival rate")?,
+                parse_numeric_input::<u64>(&self.timeout_input, "Timeout")?,
+                parse_numeric_input::<u64>(&self.max_requests_input, "Request budget")?,
+            ))
+        })();
+
+        let (workers, duration, rps, timeout, max_requests) = match parsed {
+            Ok(values) => values,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+
+        self.workers = workers;
+        self.duration = duration;
+        self.rps = rps;
+        self.timeout = timeout;
+        self.max_requests = max_requests;
+
         self.reset_results();
         self.error = None;
         self.last_export = None;
@@ -660,7 +705,7 @@ impl RedPulseApp {
         }
 
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.vertical(|ui| {
                 ui.label("Method");
                 egui::ComboBox::from_id_salt("method")
@@ -670,70 +715,74 @@ impl RedPulseApp {
                         ui.selectable_value(&mut self.method, "POST".into(), "POST");
                     });
             });
-            ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Workers");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::DragValue::new(&mut self.workers)
-                        .speed(1)
-                        .suffix(" concurrent"),
+                    egui::TextEdit::singleline(&mut self.workers_input)
+                        .desired_width(105.0)
+                        .font(egui::TextStyle::Monospace),
                 );
+                ui.label(egui::RichText::new("concurrent").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
-            ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Duration");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::DragValue::new(&mut self.duration)
-                        .speed(1)
-                        .suffix(" s"),
+                    egui::TextEdit::singleline(&mut self.duration_input)
+                        .desired_width(88.0)
+                        .font(egui::TextStyle::Monospace),
                 );
+                ui.label(egui::RichText::new("seconds").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
-            ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Arrival rate");
                 ui.add_enabled(
                     self.running.is_none() && self.load_model == LoadModel::ConstantArrivalRate,
-                    egui::DragValue::new(&mut self.rps)
-                        .speed(10)
-                        .suffix(" req/s"),
+                    egui::TextEdit::singleline(&mut self.rps_input)
+                        .desired_width(105.0)
+                        .font(egui::TextStyle::Monospace),
                 );
+                ui.label(egui::RichText::new("req/s").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
-            ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.label("Timeout");
                 ui.add_enabled(
                     self.running.is_none(),
-                    egui::DragValue::new(&mut self.timeout)
-                        .speed(1)
-                        .suffix(" s"),
+                    egui::TextEdit::singleline(&mut self.timeout_input)
+                        .desired_width(88.0)
+                        .font(egui::TextStyle::Monospace),
                 );
+                ui.label(egui::RichText::new("seconds").small().color(egui::Color32::from_rgb(137, 157, 181)));
             });
         });
 
         if self.load_model == LoadModel::ClosedLoop {
             ui.label(
                 egui::RichText::new(
-                    "Closed Loop uses worker count as the concurrency limit; the arrival-rate slider is not used.",
+                    "Closed Loop uses worker count as the concurrency limit; arrival rate is not used.",
                 )
                 .small()
                 .color(egui::Color32::from_rgb(137, 157, 181)),
             );
         }
 
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label("Request budget");
-            ui.add_enabled(
-                self.running.is_none(),
-                egui::DragValue::new(&mut self.max_requests)
-                    .speed(100)
-                    .suffix(" requests"),
-            );
+            ui.vertical(|ui| {
+                ui.label("Request budget");
+                ui.add_enabled(
+                    self.running.is_none(),
+                    egui::TextEdit::singleline(&mut self.max_requests_input)
+                        .desired_width(150.0)
+                        .font(egui::TextStyle::Monospace),
+                );
+                ui.label(egui::RichText::new("total requests").small().color(egui::Color32::from_rgb(137, 157, 181)));
+            });
         });
         ui.label(
             egui::RichText::new(format!(
-                "No fixed worker or RPS ceiling. The run budget is yours to configure. POST JSON is bounded to {} KiB; response measurement to 2 MiB.",
+                "Direct numeric input without a slider-imposed ceiling. Accepted values depend on integer range and available OS/runtime resources. The request budget caps each run. POST JSON is bounded to {} KiB; response measurement to 2 MiB.",
                 MAX_REQUEST_BODY_BYTES / 1024
             ))
             .small()
