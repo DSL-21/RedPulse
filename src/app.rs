@@ -45,8 +45,12 @@ impl TestProfile {
     fn description(self) -> &'static str {
         match self {
             Self::Performance => "Measure HTTP throughput, latency and generator headroom.",
-            Self::LoadBalancer => "Distribute requests across resolved IPs and compare observed backend responses.",
-            Self::Protection => "Run a controlled HTTP test and record access-denied, rate-limit and service-protection responses.",
+            Self::LoadBalancer => {
+                "Distribute requests across resolved IPs and compare observed backend responses."
+            }
+            Self::Protection => {
+                "Run a controlled HTTP test and record access-denied, rate-limit and service-protection responses."
+            }
         }
     }
 }
@@ -754,9 +758,23 @@ impl RedPulseApp {
         ui.horizontal_wrapped(|ui| {
             let mut selected_profile = self.profile;
             let mut changed = false;
-            changed |= ui.selectable_value(&mut selected_profile, TestProfile::Performance, "Performance").changed();
-            changed |= ui.selectable_value(&mut selected_profile, TestProfile::LoadBalancer, "Load Balancer").changed();
-            changed |= ui.selectable_value(&mut selected_profile, TestProfile::Protection, "Protection").changed();
+            changed |= ui
+                .selectable_value(
+                    &mut selected_profile,
+                    TestProfile::Performance,
+                    "Performance",
+                )
+                .changed();
+            changed |= ui
+                .selectable_value(
+                    &mut selected_profile,
+                    TestProfile::LoadBalancer,
+                    "Load Balancer",
+                )
+                .changed();
+            changed |= ui
+                .selectable_value(&mut selected_profile, TestProfile::Protection, "Protection")
+                .changed();
             if changed && self.running.is_none() {
                 self.profile = selected_profile;
                 self.apply_profile_defaults();
@@ -773,7 +791,11 @@ impl RedPulseApp {
                     egui::RichText::new(format!(
                         "Active routing: {} · backend response header: {}",
                         self.dns_strategy.label(),
-                        if self.backend_id_header.trim().is_empty() { "disabled" } else { self.backend_id_header.as_str() }
+                        if self.backend_id_header.trim().is_empty() {
+                            "disabled"
+                        } else {
+                            self.backend_id_header.as_str()
+                        }
                     ))
                     .small()
                     .color(egui::Color32::from_rgb(105, 190, 250)),
@@ -809,7 +831,11 @@ impl RedPulseApp {
                         .desired_width(92.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("concurrent").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("concurrent")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
             ui.vertical(|ui| {
                 ui.label("Duration");
@@ -819,7 +845,11 @@ impl RedPulseApp {
                         .desired_width(92.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("seconds").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("seconds")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
             ui.vertical(|ui| {
                 ui.label("Arrival rate");
@@ -829,7 +859,11 @@ impl RedPulseApp {
                         .desired_width(92.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("req/s").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("req/s")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
             ui.vertical(|ui| {
                 ui.label("Request budget");
@@ -839,7 +873,11 @@ impl RedPulseApp {
                         .desired_width(125.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("total requests").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("total requests")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
         });
 
@@ -1014,10 +1052,25 @@ impl RedPulseApp {
             ui.add_space(8.0);
             ui.heading("Protection responses");
             ui.columns(4, |columns| {
-                Self::metric_card(&mut columns[0], "401 UNAUTHORIZED", self.total_unauthorized, "");
+                Self::metric_card(
+                    &mut columns[0],
+                    "401 UNAUTHORIZED",
+                    self.total_unauthorized,
+                    "",
+                );
                 Self::metric_card(&mut columns[1], "403 FORBIDDEN", self.total_forbidden, "");
-                Self::metric_card(&mut columns[2], "429 RATE LIMITED", self.total_rate_limited, "");
-                Self::metric_card(&mut columns[3], "503 UNAVAILABLE", self.total_unavailable, "");
+                Self::metric_card(
+                    &mut columns[2],
+                    "429 RATE LIMITED",
+                    self.total_rate_limited,
+                    "",
+                );
+                Self::metric_card(
+                    &mut columns[3],
+                    "503 UNAVAILABLE",
+                    self.total_unavailable,
+                    "",
+                );
             });
             ui.label(
                 egui::RichText::new(
@@ -1153,11 +1206,26 @@ impl RedPulseApp {
             if self.resolved_addresses.is_empty() {
                 ui.label("Resolving target addresses…");
             } else {
-                let total: u64 = self.origin_metrics.values().map(|metric| metric.requests).sum();
+                let total: u64 = self
+                    .origin_metrics
+                    .values()
+                    .map(|metric| metric.requests)
+                    .sum();
                 for address in &self.resolved_addresses {
-                    let metric = self.origin_metrics.get(address).cloned().unwrap_or_default();
-                    let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
-                    let average = metric.average_latency_ms().map(|value| format!("{value:.1} ms")).unwrap_or_else(|| "—".into());
+                    let metric = self
+                        .origin_metrics
+                        .get(address)
+                        .cloned()
+                        .unwrap_or_default();
+                    let share = if total == 0 {
+                        0.0
+                    } else {
+                        metric.requests as f64 * 100.0 / total as f64
+                    };
+                    let average = metric
+                        .average_latency_ms()
+                        .map(|value| format!("{value:.1} ms"))
+                        .unwrap_or_else(|| "—".into());
                     ui.label(format!("{address}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} HTTP errors", metric.requests, metric.errors));
                 }
                 ui.label(
@@ -1178,11 +1246,25 @@ impl RedPulseApp {
         if !self.backend_metrics.is_empty() {
             ui.add_space(8.0);
             ui.heading("Backend distribution");
-            let total: u64 = self.backend_metrics.values().map(|metric| metric.requests).sum();
+            let total: u64 = self
+                .backend_metrics
+                .values()
+                .map(|metric| metric.requests)
+                .sum();
             for (backend, metric) in &self.backend_metrics {
-                let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
-                let average = metric.average_latency_ms().map(|value| format!("{value:.1} ms")).unwrap_or_else(|| "—".into());
-                ui.label(format!("{backend}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} HTTP errors", metric.requests, metric.errors));
+                let share = if total == 0 {
+                    0.0
+                } else {
+                    metric.requests as f64 * 100.0 / total as f64
+                };
+                let average = metric
+                    .average_latency_ms()
+                    .map(|value| format!("{value:.1} ms"))
+                    .unwrap_or_else(|| "—".into());
+                ui.label(format!(
+                    "{backend}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} HTTP errors",
+                    metric.requests, metric.errors
+                ));
             }
             ui.label(egui::RichText::new(format!("Identified {total} of {} completed responses. The configured response header must be emitted by your backend; the edge IP alone does not identify an origin node.", self.total_received)).small().color(egui::Color32::from_rgb(137, 157, 181)));
         } else if self.profile == TestProfile::LoadBalancer && self.total_received > 0 {
@@ -1352,19 +1434,45 @@ impl RedPulseApp {
         }
         if !self.backend_metrics.is_empty() {
             ui.heading("Backend distribution");
-            let total: u64 = self.backend_metrics.values().map(|metric| metric.requests).sum();
+            let total: u64 = self
+                .backend_metrics
+                .values()
+                .map(|metric| metric.requests)
+                .sum();
             for (backend, metric) in &self.backend_metrics {
-                let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
-                ui.label(format!("{backend}: {} requests ({share:.1}%) · {} HTTP errors", metric.requests, metric.errors));
+                let share = if total == 0 {
+                    0.0
+                } else {
+                    metric.requests as f64 * 100.0 / total as f64
+                };
+                ui.label(format!(
+                    "{backend}: {} requests ({share:.1}%) · {} HTTP errors",
+                    metric.requests, metric.errors
+                ));
             }
         }
         if self.dns_strategy == DnsStrategy::RoundRobin {
-            let total: u64 = self.origin_metrics.values().map(|metric| metric.requests).sum();
+            let total: u64 = self
+                .origin_metrics
+                .values()
+                .map(|metric| metric.requests)
+                .sum();
             ui.heading("Destination IP distribution");
             for address in &self.resolved_addresses {
-                let metric = self.origin_metrics.get(address).cloned().unwrap_or_default();
-                let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
-                ui.label(format!("{address}: {} requests ({share:.1}%) · {} HTTP errors", metric.requests, metric.errors));
+                let metric = self
+                    .origin_metrics
+                    .get(address)
+                    .cloned()
+                    .unwrap_or_default();
+                let share = if total == 0 {
+                    0.0
+                } else {
+                    metric.requests as f64 * 100.0 / total as f64
+                };
+                ui.label(format!(
+                    "{address}: {} requests ({share:.1}%) · {} HTTP errors",
+                    metric.requests, metric.errors
+                ));
             }
         }
         ui.label(format!(
@@ -1540,8 +1648,8 @@ impl eframe::App for RedPulseApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        DistributionMetrics, LoadModel, RedPulseApp, TestProfile,
-        normalized_process_cpu_percent, parse_arrival_rate_input, parse_numeric_input,
+        DistributionMetrics, LoadModel, RedPulseApp, TestProfile, normalized_process_cpu_percent,
+        parse_arrival_rate_input, parse_numeric_input,
     };
 
     #[test]
@@ -1559,8 +1667,14 @@ mod tests {
 
     #[test]
     fn test_profiles_have_clear_distinct_purposes() {
-        assert_ne!(TestProfile::Performance.description(), TestProfile::LoadBalancer.description());
-        assert_ne!(TestProfile::LoadBalancer.description(), TestProfile::Protection.description());
+        assert_ne!(
+            TestProfile::Performance.description(),
+            TestProfile::LoadBalancer.description()
+        );
+        assert_ne!(
+            TestProfile::LoadBalancer.description(),
+            TestProfile::Protection.description()
+        );
         assert_eq!(TestProfile::LoadBalancer.label(), "Load Balancer");
     }
 

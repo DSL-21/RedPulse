@@ -337,7 +337,9 @@ fn analyze_cors(headers: &HeaderMap, findings: &mut Vec<Finding>) {
 }
 
 fn analyze_edge_signatures(headers: &HeaderMap, findings: &mut Vec<Finding>) {
-    let server = header_text(headers, "server").unwrap_or_default().to_ascii_lowercase();
+    let server = header_text(headers, "server")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
     let signatures = [
         (
@@ -368,15 +370,13 @@ fn analyze_edge_signatures(headers: &HeaderMap, findings: &mut Vec<Finding>) {
             "This is a provider fingerprint, not proof that a particular WAF policy blocked or inspected the request.",
         ),
         (
-            headers.contains_key("x-akamai-transformed")
-                || headers.contains_key("akamai-grn"),
+            headers.contains_key("x-akamai-transformed") || headers.contains_key("akamai-grn"),
             "Akamai edge signature observed",
             "An Akamai response marker was present.",
             "This identifies an Akamai edge marker only; it does not confirm the active protection configuration.",
         ),
         (
-            headers.contains_key("x-served-by")
-                || headers.contains_key("x-timer"),
+            headers.contains_key("x-served-by") || headers.contains_key("x-timer"),
             "Fastly edge signature observed",
             "A Fastly-style response marker was present.",
             "This identifies an edge delivery marker; it does not prove that a WAF policy is enabled.",
@@ -791,7 +791,10 @@ fn analyze_probe_results(url: &Url, probes: &[ProbeResult], findings: &mut Vec<F
                     Severity::Info,
                     "Protection signals",
                     title,
-                    format!("{} {} returned HTTP {status}. {evidence}", probe.method, probe.path),
+                    format!(
+                        "{} {} returned HTTP {status}. {evidence}",
+                        probe.method, probe.path
+                    ),
                     "Correlate the response with application, load-balancer and WAF logs before attributing it to a particular protection layer.",
                 );
             }
