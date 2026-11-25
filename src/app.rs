@@ -40,6 +40,18 @@ where
         .map_err(|error| format!("{field} must be a valid whole number: {error}"))
 }
 
+fn parse_arrival_rate_input(
+    value: &str,
+    load_model: LoadModel,
+    current_value: u64,
+) -> Result<u64, String> {
+    if load_model == LoadModel::ConstantArrivalRate {
+        parse_numeric_input::<u64>(value, "Arrival rate")
+    } else {
+        Ok(current_value)
+    }
+}
+
 fn downsample_min_max(points: &VecDeque<(f64, f64)>, max_points: usize) -> Vec<[f64; 2]> {
     let mut sorted: Vec<[f64; 2]> = points.iter().map(|(x, y)| [*x, *y]).collect();
     sorted.sort_by(|left, right| left[0].total_cmp(&right[0]));
@@ -271,11 +283,7 @@ impl RedPulseApp {
             Ok::<_, String>((
                 parse_numeric_input::<usize>(&self.workers_input, "Workers")?,
                 parse_numeric_input::<u64>(&self.duration_input, "Duration")?,
-                if self.load_model == LoadModel::ConstantArrivalRate {
-                    parse_numeric_input::<u64>(&self.rps_input, "Arrival rate")?
-                } else {
-                    self.rps
-                },
+                parse_arrival_rate_input(&self.rps_input, self.load_model, self.rps)?,
                 parse_numeric_input::<u64>(&self.timeout_input, "Timeout")?,
                 parse_numeric_input::<u64>(&self.max_requests_input, "Request budget")?,
             ))
@@ -1394,7 +1402,7 @@ impl eframe::App for RedPulseApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{RedPulseApp, parse_numeric_input};
+    use super::{LoadModel, RedPulseApp, parse_arrival_rate_input, parse_numeric_input};
 
     #[test]
     fn numeric_text_fields_accept_large_user_supplied_values() {
@@ -1407,6 +1415,19 @@ mod tests {
             parse_numeric_input::<u64>("5000000000", "Request budget"),
             Ok(5_000_000_000)
         );
+    }
+
+    #[test]
+    fn closed_loop_ignores_the_unused_arrival_rate_field() {
+        assert_eq!(
+            parse_arrival_rate_input("not-used", LoadModel::ClosedLoop, 5),
+            Ok(5)
+        );
+        assert_eq!(
+            parse_arrival_rate_input("12", LoadModel::ConstantArrivalRate, 5),
+            Ok(12)
+        );
+        assert!(parse_arrival_rate_input("invalid", LoadModel::ConstantArrivalRate, 5).is_err());
     }
 
     #[test]
