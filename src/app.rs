@@ -996,6 +996,24 @@ impl RedPulseApp {
                 .small()
                 .color(egui::Color32::from_rgb(135, 153, 176)),
             );
+
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(235, 104, 112),
+                    format!("━ RedPulse process · {:.1}% of total CPU capacity", process_cpu_capacity),
+                );
+                ui.colored_label(
+                    egui::Color32::from_rgb(83, 183, 246),
+                    format!("━ Whole PC CPU · {:.1}%", hardware.system_cpu_percent),
+                );
+            });
+            ui.label(
+                egui::RichText::new(
+                    "The red line is RedPulse's CPU use normalized across all logical cores. The blue line is total host CPU use."
+                )
+                .small()
+                .color(egui::Color32::from_rgb(135, 153, 176)),
+            );
             if hardware.system_cpu_percent >= 95.0 || process_cpu_capacity >= 85.0 {
                 ui.colored_label(
                     egui::Color32::from_rgb(238, 178, 82),
@@ -1035,8 +1053,16 @@ impl RedPulseApp {
                 .include_y(0.0)
                 .include_y(100.0)
                 .show(ui, |plot_ui| {
-                    plot_ui.line(Line::new("RedPulse process capacity", cpu_points).width(1.8_f32));
-                    plot_ui.line(Line::new("Whole host", host_points).width(1.4_f32));
+                    plot_ui.line(
+                        Line::new("RedPulse process", cpu_points)
+                            .color(egui::Color32::from_rgb(235, 104, 112))
+                            .width(1.8_f32),
+                    );
+                    plot_ui.line(
+                        Line::new("Whole PC CPU", host_points)
+                            .color(egui::Color32::from_rgb(83, 183, 246))
+                            .width(1.4_f32),
+                    );
                 });
         } else {
             ui.label("Hardware telemetry is sampled once per second while a test is running.");
@@ -1097,6 +1123,39 @@ impl RedPulseApp {
             });
         });
 
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                egui::Color32::from_rgb(83, 183, 246),
+                "━ Blue: individual response times",
+            );
+            if self.http_response_count > 0 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(76, 195, 142),
+                    format!("━ Green: P50 median · {p50:.1} ms"),
+                );
+                ui.colored_label(
+                    egui::Color32::from_rgb(238, 178, 82),
+                    format!("━ Orange: P95 · {p95:.1} ms"),
+                );
+            } else {
+                ui.label("Percentile lines appear after the first HTTP response.");
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "P50 = half of HTTP responses were this fast or faster. P95 = 95% were this fast or faster; 5% took longer."
+            )
+            .small()
+            .color(egui::Color32::from_rgb(160, 180, 202)),
+        );
+        ui.label(
+            egui::RichText::new(
+                "Percentile lines summarize all HTTP responses in this run so far. They are statistics, not performance limits; network errors and timeouts are excluded."
+            )
+            .small()
+            .color(egui::Color32::from_rgb(135, 153, 176)),
+        );
+
         let points: PlotPoints = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
         if self.recent_latencies.is_empty() {
             ui.label("Waiting for HTTP response samples…");
@@ -1125,12 +1184,12 @@ impl RedPulseApp {
                     let p50_points: PlotPoints = vec![[0.0, p50], [x_end, p50]].into();
                     let p95_points: PlotPoints = vec![[0.0, p95], [x_end, p95]].into();
                     plot_ui.line(
-                        Line::new("P50", p50_points)
+                        Line::new("P50 median", p50_points)
                             .color(egui::Color32::from_rgb(76, 195, 142))
                             .width(1.2_f32),
                     );
                     plot_ui.line(
-                        Line::new("P95", p95_points)
+                        Line::new("P95 percentile", p95_points)
                             .color(egui::Color32::from_rgb(238, 178, 82))
                             .width(1.2_f32),
                     );
