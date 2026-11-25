@@ -750,15 +750,6 @@ impl RedPulseApp {
         );
         ui.add_space(12.0);
         ui.heading("Test configuration");
-        ui.add_space(8.0);
-        ui.label("Target URL");
-        ui.add_enabled(
-            self.running.is_none(),
-            egui::TextEdit::singleline(&mut self.target)
-                .hint_text("https://your-lab.example")
-                .desired_width(f32::INFINITY),
-        );
-
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
             let mut selected_profile = self.profile;
