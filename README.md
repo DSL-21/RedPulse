@@ -23,6 +23,7 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 - Bounded per-run queue sized from the configured worker count.
 - Global request-start pacing removed from Closed Loop; concurrency and response time determine its natural throughput.
 - Live RPS, HTTP status counts, errors, and latency percentiles.
+- Explicit color legends and live values for CPU and response-time charts; P50 (median) and P95 are explained directly in the dashboard.
 - Min, average, P50, P95, P99 and max response latency.
 - Request accounting: scheduled, started, completed, queued, in-flight, cancelled and dropped.
 - JSON and CSV export of retained samples.
