@@ -767,6 +767,29 @@ impl RedPulseApp {
                 .small()
                 .color(egui::Color32::from_rgb(137, 157, 181)),
         );
+        match self.profile {
+            TestProfile::LoadBalancer => {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Active routing: {} · backend response header: {}",
+                        self.dns_strategy.label(),
+                        if self.backend_id_header.trim().is_empty() { "disabled" } else { self.backend_id_header.as_str() }
+                    ))
+                    .small()
+                    .color(egui::Color32::from_rgb(105, 190, 250)),
+                );
+            }
+            TestProfile::Protection => {
+                ui.label(
+                    egui::RichText::new(
+                        "Records observed 401 / 403 / 429 / 503 responses and passive edge-service signatures; it does not attempt to bypass protections.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
+            }
+            TestProfile::Performance => {}
+        }
         ui.add_space(8.0);
         ui.heading("Target");
         ui.add_enabled(
@@ -1124,7 +1147,7 @@ impl RedPulseApp {
         } else {
             ui.label("CPU and network telemetry appears after the first half-second sample.");
         }
-        if self.dns_strategy == DnsStrategy::RoundRobin || self.profile == TestProfile::LoadBalancer {
+        if self.dns_strategy == DnsStrategy::RoundRobin {
             ui.add_space(8.0);
             ui.heading("Destination IP distribution");
             if self.resolved_addresses.is_empty() {
@@ -1148,6 +1171,9 @@ impl RedPulseApp {
                     ui.colored_label(egui::Color32::from_rgb(238, 178, 82), "Only one destination IP was resolved; this run cannot compare Multi-IP distribution.");
                 }
             }
+        }
+        if self.profile == TestProfile::LoadBalancer && self.dns_strategy == DnsStrategy::System {
+            ui.label("System DNS is selected. Choose Round-robin DNS IPs in Advanced settings to pin requests across resolved destination addresses.");
         }
         if !self.backend_metrics.is_empty() {
             ui.add_space(8.0);
