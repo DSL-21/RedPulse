@@ -23,7 +23,7 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 - Bounded per-run queue sized from the configured worker count.
 - Global request-start pacing removed from Closed Loop; concurrency and response time determine its natural throughput.
 - Live RPS, HTTP status counts, errors, and latency percentiles.
-- Explicit color legends and live values for CPU and response-time charts; P50 (median) and P95 are explained directly in the dashboard.
+- Simple, single-line CPU and response-time charts. The graphs show RedPulse CPU usage and individual HTTP response times; P50/P95 stay in a compact text summary.
 - Min, average, P50, P95, P99 and max response latency.
 - Request accounting: scheduled, started, completed, queued, in-flight, cancelled and dropped.
 - JSON and CSV export of retained samples.
@@ -83,7 +83,7 @@ The queue remains bounded to prevent unbounded backlog growth. A bounded queue d
 
 The Tokio runtime uses the logical CPU parallelism reported by the operating system instead of clamping runtime threads to eight. Worker tasks are asynchronous and are not one operating-system thread each. Increasing workers can raise concurrent network activity, but it does not guarantee higher throughput: connection limits, target capacity, local socket limits, CPU, memory, and available bandwidth all matter.
 
-RedPulse samples hardware telemetry once per second while a run is active. It records average host CPU usage across logical cores, RedPulse process CPU usage, host memory usage, RedPulse process memory, and host-wide network RX/TX throughput. Network counters are summed across the host's visible interfaces; they are not process-only measurements. Process CPU can exceed 100% because one fully utilized logical core is represented as 100%; the UI also normalizes process CPU against the total logical-core capacity.
+RedPulse samples hardware telemetry twice per second (every 500 ms) while a run is active. It records average host CPU usage across logical cores, RedPulse process CPU usage, host memory usage, RedPulse process memory, and host-wide network RX/TX throughput. Network counters are summed across the host's visible interfaces; they are not process-only measurements. Process CPU can exceed 100% because one fully utilized logical core is represented as 100%; the UI also normalizes process CPU against the total logical-core capacity. The CPU chart shows this normalized RedPulse usage as one line; whole-host CPU remains a summary value above the chart.
 
 The CPU headroom indicator is a diagnostic heuristic, not a proof that the generator is saturated. Treat a run with very high host or process CPU as potentially generator-limited. The runtime and worker tasks are asynchronous; adding workers does not automatically mean more CPU throughput.
 
