@@ -1000,7 +1000,10 @@ impl RedPulseApp {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(
                     egui::Color32::from_rgb(235, 104, 112),
-                    format!("━ RedPulse process · {:.1}% of total CPU capacity", process_cpu_capacity),
+                    format!(
+                        "━ RedPulse process · {:.1}% of total CPU capacity",
+                        process_cpu_capacity
+                    ),
                 );
                 ui.colored_label(
                     egui::Color32::from_rgb(83, 183, 246),
