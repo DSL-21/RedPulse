@@ -624,6 +624,7 @@ impl RedPulseApp {
             report::export_csv(&path, &all_samples)
         } else if let Some(run) = &self.last_run {
             let config = report::RunConfig {
+                profile: run.profile.label(),
                 target: &run.target,
                 method: &run.method,
                 workers: run.workers,
