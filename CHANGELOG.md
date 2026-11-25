@@ -2,6 +2,18 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.5.3] - 2026-11-25
+
+### Improved
+- Replaced the two-line CPU chart with one RedPulse-only utilization line; whole-host CPU remains visible as a summary metric.
+- Replaced the three-line response chart with one line for individual HTTP responses; P50 and P95 remain as compact numeric summaries above the graph.
+- Changed the RedPulse CPU metric from percent of one core to percent of total logical-core capacity, matching the CPU chart.
+- Increased hardware telemetry sampling from once per second to twice per second and increased retained hardware history to 3,600 samples (30 minutes).
+- Increased the active dashboard repaint cadence from 100 ms to 50 ms for more responsive live updates.
+- Restyled Recon's red action button as a standard blue action and renamed it "Start HTTP audit".
+- Clarified that Recon sends six read-only HTTP requests to inspect headers, cookies, public metadata and advertised methods; it does not run exploit attempts.
+
+
 ## [0.5.2] - 2026-11-25
 
 ### Improved
