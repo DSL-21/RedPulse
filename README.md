@@ -17,6 +17,7 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 - HTTP/1.1 and HTTP/2 support, with the negotiated protocol recorded per response.
 - Constant Arrival Rate and Closed Loop traffic-generation models.
 - User-configurable worker count, arrival rate, run duration, timeout, and request budget.
+- Directly editable numeric text fields for workers, arrival rate, duration, timeout, and request budget; no slider-imposed GUI ceiling.
 - No fixed application-level 64-worker or 200-RPS ceiling.
 - Tokio runtime worker threads automatically match the logical CPU parallelism reported by the operating system.
 - Bounded per-run queue sized from the configured worker count.
