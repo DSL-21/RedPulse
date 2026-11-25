@@ -177,6 +177,7 @@ impl Drop for TestHandle {
 pub const DEFAULT_MAX_TOTAL_REQUESTS: u64 = 10_000;
 pub const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const HARDWARE_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
 struct Counters {
@@ -620,7 +621,7 @@ fn spawn_hardware_monitor(
             let mut previous_tick = Instant::now();
 
             while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
-                thread::sleep(Duration::from_secs(1));
+                thread::sleep(HARDWARE_SAMPLE_INTERVAL);
 
                 if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
                     break;
