@@ -140,9 +140,9 @@ impl ReconState {
         let result = self.receiver.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                Some(Err("Protection audit worker ended without returning a report.".into()))
-            }
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                "Protection audit worker ended without returning a report.".into(),
+            )),
         });
 
         if let Some(result) = result {

@@ -1232,7 +1232,10 @@ impl RedPulseApp {
                         .average_latency_ms()
                         .map(|value| format!("{value:.1} ms"))
                         .unwrap_or_else(|| "—".into());
-                    ui.label(format!("{address}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} errors", metric.requests, metric.errors));
+                    ui.label(format!(
+                        "{address}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} errors",
+                        metric.requests, metric.errors
+                    ));
                 }
                 ui.label(
                     egui::RichText::new(
