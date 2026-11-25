@@ -2,6 +2,24 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.6.0] - 2026-11-25
+
+### Added
+- Three guided Traffic Lab profiles: Performance, Load Balancer, and Protection.
+- Load Balancer profile defaults to DNS round-robin and reports per-destination-IP request share, average latency, and HTTP/network errors.
+- Per-backend request share, average latency, and error metrics when the configured backend identity response header is returned.
+- Protection profile counters for observed HTTP 401, 403, 429, and 503 responses.
+- Passive edge-provider signature findings for Cloudflare, Fastly, Akamai, Imperva, Sucuri, and AWS WAF response markers.
+- Tests for edge-provider signal interpretation, rate-limit observations, profile descriptions, and route distribution metrics.
+
+### Improved
+- Advanced traffic controls are collapsed by default, leaving target, guided profile, workers, duration, arrival rate, and request budget in the main view.
+- Renamed Recon navigation and screen to Protection / Web Protection Audit, with explicit read-only scope.
+- Clarified that DNS round-robin selects destination IPs, does not rotate source IPs, and does not inherently reveal hidden backends.
+- Protection and edge-service findings are informational observations, not claims that a WAF is enabled or bypassed.
+- Per-route errors now include transport failures as well as HTTP 4xx/5xx responses.
+
+
 ## [0.5.3] - 2026-11-25
 
 ### Improved
