@@ -1036,7 +1036,7 @@ impl RedPulseApp {
                 .x_axis_label("Test time (s)")
                 .y_axis_label("RedPulse CPU (% of PC)")
                 .include_y(0.0)
-                                .show(ui, |plot_ui| {
+                .show(ui, |plot_ui| {
                     plot_ui.line(
                         Line::new("RedPulse CPU", cpu_points)
                             .color(egui::Color32::from_rgb(83, 183, 246))
@@ -1143,7 +1143,6 @@ impl RedPulseApp {
                         .color(egui::Color32::from_rgb(83, 183, 246))
                         .width(2.0_f32),
                 );
-
             });
         }
 
