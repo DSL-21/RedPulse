@@ -108,6 +108,10 @@ impl ReconState {
         }
     }
 
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
     fn start(&mut self) {
         self.report = None;
         self.error = None;
