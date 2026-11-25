@@ -1571,20 +1571,20 @@ impl RedPulseApp {
         ui.add_space(8.0);
         ui.label("Engine: Tokio + Reqwest + Rustls");
         ui.label("Interface: egui / eframe");
-        ui.label("Recon: bounded HTTP surface inspection, header and cookie posture checks");
+        ui.label("Protection Audit: read-only HTTP surface, edge-provider and security-header checks");
         ui.label("Load testing: Constant Arrival Rate and Closed Loop");
         ui.label("DNS routing: system resolver or round-robin across resolved IP addresses");
         ui.label("Metrics: response status, throughput, latency percentiles and generator/host hardware telemetry");
         ui.label("Reports: JSON and CSV for benchmark runs; JSON retains hardware samples");
-        ui.label("Recon profile: six sequential HTTP probes, no redirects, five-second timeout");
+        ui.label("Protection Audit: six sequential read-only HTTP checks, no redirects, five-second timeout");
         ui.separator();
         ui.label(
             "Constant Arrival Rate schedules requests independently from HTTP worker completion.",
         );
         ui.label("Closed Loop lets each worker repeat only after its previous request completes.");
         ui.label("A bounded queue reports constant-rate overload as dropped arrivals instead of delaying future slots.");
-        ui.label("Recon uses a fixed low-volume probe set: GET, HEAD, OPTIONS, security.txt, robots.txt and sitemap.xml.");
-        ui.label("No credential guessing, exploit payloads, destructive HTTP methods or recursive wordlist scans are part of the recon profile.");
+        ui.label("Protection Audit uses a fixed low-volume probe set: GET, HEAD, OPTIONS, security.txt, robots.txt and sitemap.xml.");
+        ui.label("No credential guessing, exploit payloads, destructive HTTP methods or recursive wordlist scans are part of this read-only audit.");
         ui.label("Redirect following is disabled; each sample measures the configured endpoint response.");
     }
 }
