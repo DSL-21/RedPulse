@@ -920,6 +920,11 @@ impl RedPulseApp {
                             ui.selectable_value(&mut self.dns_strategy, DnsStrategy::RoundRobin, DnsStrategy::RoundRobin.label());
                         });
                 });
+                ui.label(
+                    egui::RichText::new(self.dns_strategy.description())
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
                 if self.profile == TestProfile::LoadBalancer {
                     ui.label(
                         egui::RichText::new(
