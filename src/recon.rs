@@ -652,7 +652,11 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(PROBE_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(concat!("RedPulse/", env!("CARGO_PKG_VERSION"), " ProtectionAudit"))
+        .user_agent(concat!(
+            "RedPulse/",
+            env!("CARGO_PKG_VERSION"),
+            " ProtectionAudit"
+        ))
         .build()
         .map_err(|error| format!("Could not create HTTP client: {error}"))?;
 

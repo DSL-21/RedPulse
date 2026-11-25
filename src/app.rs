@@ -1571,7 +1571,9 @@ impl RedPulseApp {
         ui.add_space(8.0);
         ui.label("Engine: Tokio + Reqwest + Rustls");
         ui.label("Interface: egui / eframe");
-        ui.label("Protection Audit: read-only HTTP surface, edge-provider and security-header checks");
+        ui.label(
+            "Protection Audit: read-only HTTP surface, edge-provider and security-header checks",
+        );
         ui.label("Load testing: Constant Arrival Rate and Closed Loop");
         ui.label("DNS routing: system resolver or round-robin across resolved IP addresses");
         ui.label("Metrics: response status, throughput, latency percentiles and generator/host hardware telemetry");
