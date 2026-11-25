@@ -62,7 +62,7 @@ struct DistributionMetrics {
 impl DistributionMetrics {
     fn record(&mut self, status: u16, latency_ms: f64) {
         self.requests = self.requests.saturating_add(1);
-        if status >= 400 {
+        if status == 0 || status >= 400 {
             self.errors = self.errors.saturating_add(1);
         }
         if status != 0 && latency_ms.is_finite() && latency_ms >= 0.0 {
@@ -1526,7 +1526,7 @@ mod tests {
         metrics.record(0, 0.0);
 
         assert_eq!(metrics.requests, 3);
-        assert_eq!(metrics.errors, 1);
+        assert_eq!(metrics.errors, 2);
         assert_eq!(metrics.latency_samples, 2);
         assert_eq!(metrics.average_latency_ms(), Some(15.0));
     }
