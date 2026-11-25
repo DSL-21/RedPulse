@@ -118,7 +118,7 @@ impl ReconState {
         let target = self.target.trim().to_owned();
         let (tx, rx) = mpsc::channel();
         self.running = true;
-        self.status = "RUNNING RECON".into();
+        self.status = "RUNNING PROTECTION AUDIT".into();
         self.receiver = Some(rx);
 
         let spawn = thread::Builder::new()
@@ -131,7 +131,7 @@ impl ReconState {
         if let Err(error) = spawn {
             self.running = false;
             self.status = "FAILED".into();
-            self.error = Some(format!("Could not start recon worker: {error}"));
+            self.error = Some(format!("Could not start protection audit worker: {error}"));
             self.receiver = None;
         }
     }
@@ -141,7 +141,7 @@ impl ReconState {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
-                Some(Err("Recon worker ended without returning a report.".into()))
+                Some(Err("Protection audit worker ended without returning a report.".into()))
             }
         });
 
