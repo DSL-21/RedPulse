@@ -1232,7 +1232,7 @@ impl RedPulseApp {
                         .average_latency_ms()
                         .map(|value| format!("{value:.1} ms"))
                         .unwrap_or_else(|| "—".into());
-                    ui.label(format!("{address}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} HTTP errors", metric.requests, metric.errors));
+                    ui.label(format!("{address}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} errors", metric.requests, metric.errors));
                 }
                 ui.label(
                     egui::RichText::new(
@@ -1268,7 +1268,7 @@ impl RedPulseApp {
                     .map(|value| format!("{value:.1} ms"))
                     .unwrap_or_else(|| "—".into());
                 ui.label(format!(
-                    "{backend}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} HTTP errors",
+                    "{backend}  ·  {} requests ({share:.1}%)  ·  avg {average}  ·  {} errors",
                     metric.requests, metric.errors
                 ));
             }
@@ -1452,7 +1452,7 @@ impl RedPulseApp {
                     metric.requests as f64 * 100.0 / total as f64
                 };
                 ui.label(format!(
-                    "{backend}: {} requests ({share:.1}%) · {} HTTP errors",
+                    "{backend}: {} requests ({share:.1}%) · {} errors",
                     metric.requests, metric.errors
                 ));
             }
@@ -1476,7 +1476,7 @@ impl RedPulseApp {
                     metric.requests as f64 * 100.0 / total as f64
                 };
                 ui.label(format!(
-                    "{address}: {} requests ({share:.1}%) · {} HTTP errors",
+                    "{address}: {} requests ({share:.1}%) · {} errors",
                     metric.requests, metric.errors
                 ));
             }
