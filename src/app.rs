@@ -723,7 +723,11 @@ impl RedPulseApp {
                         .desired_width(105.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("concurrent").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("concurrent")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
             ui.vertical(|ui| {
                 ui.label("Duration");
@@ -733,7 +737,11 @@ impl RedPulseApp {
                         .desired_width(88.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("seconds").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("seconds")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
             ui.vertical(|ui| {
                 ui.label("Arrival rate");
@@ -743,7 +751,11 @@ impl RedPulseApp {
                         .desired_width(105.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("req/s").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("req/s")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
             ui.vertical(|ui| {
                 ui.label("Timeout");
@@ -753,7 +765,11 @@ impl RedPulseApp {
                         .desired_width(88.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("seconds").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("seconds")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
         });
 
@@ -777,7 +793,11 @@ impl RedPulseApp {
                         .desired_width(150.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                ui.label(egui::RichText::new("total requests").small().color(egui::Color32::from_rgb(137, 157, 181)));
+                ui.label(
+                    egui::RichText::new("total requests")
+                        .small()
+                        .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
             });
         });
         ui.label(
@@ -1374,10 +1394,7 @@ mod tests {
 
     #[test]
     fn numeric_text_fields_accept_large_user_supplied_values() {
-        assert_eq!(
-            parse_numeric_input::<usize>(" 4096 ", "Workers"),
-            Ok(4096)
-        );
+        assert_eq!(parse_numeric_input::<usize>(" 4096 ", "Workers"), Ok(4096));
         assert_eq!(
             parse_numeric_input::<u64>("2000000", "Arrival rate"),
             Ok(2_000_000)
