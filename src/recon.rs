@@ -170,14 +170,14 @@ impl ReconState {
 
         ui.add_space(4.0);
         ui.heading(
-            egui::RichText::new("Web Recon & Audit")
+            egui::RichText::new("Web Protection Audit")
                 .size(23.0)
                 .strong()
                 .color(egui::Color32::from_rgb(235, 242, 250)),
         );
         ui.label(
             egui::RichText::new(
-                "A lightweight, read-only HTTP check of headers, cookies, public metadata and allowed methods.",
+                "Read-only checks of edge-service signals, security headers, cookies and observed access-control responses.",
             )
             .color(egui::Color32::from_rgb(143, 160, 181)),
         );
@@ -205,7 +205,7 @@ impl ReconState {
                     if ui
                         .add_enabled(
                             !self.running && !self.target.trim().is_empty(),
-                            egui::Button::new("▶  Start HTTP audit")
+                            egui::Button::new("▶  Run protection audit")
                                 .fill(egui::Color32::from_rgb(34, 125, 190)),
                         )
                         .clicked()
