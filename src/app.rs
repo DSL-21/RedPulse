@@ -707,11 +707,11 @@ impl RedPulseApp {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (color, status) = if self.running.is_some() && self.recon.is_running() {
-                    (egui::Color32::from_rgb(73, 205, 145), "LOAD + RECON")
+                    (egui::Color32::from_rgb(73, 205, 145), "LOAD + AUDIT")
                 } else if self.running.is_some() {
                     (egui::Color32::from_rgb(73, 205, 145), "LOAD RUNNING")
                 } else if self.recon.is_running() {
-                    (egui::Color32::from_rgb(73, 205, 145), "RECON RUNNING")
+                    (egui::Color32::from_rgb(73, 205, 145), "AUDIT RUNNING")
                 } else if self.status == "Starting" {
                     (egui::Color32::from_rgb(105, 174, 238), "STARTING")
                 } else if self.status == "Completed" {
