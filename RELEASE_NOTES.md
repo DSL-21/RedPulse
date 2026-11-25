@@ -1,22 +1,25 @@
-# RedPulse 0.5.2
+# RedPulse 0.5.3
 
-RedPulse 0.5.2 makes the live Traffic Lab dashboard easier to understand by labeling the chart lines directly and explaining the statistics they represent.
+RedPulse 0.5.3 simplifies Traffic Lab and makes the live dashboard easier to read while improving telemetry responsiveness.
 
-## Clear chart legends
+## Simpler dashboard
 
-- CPU chart: red identifies RedPulse process CPU usage normalized against all logical cores; blue identifies whole-host CPU usage.
-- Response-time chart: blue identifies individual response latencies; green identifies P50 (median); orange identifies P95 (95th percentile).
-- Shows the current P50 and P95 values in milliseconds next to their labels.
+- CPU chart now has one line: RedPulse process CPU use as a percentage of total logical-core capacity.
+- Whole-host CPU remains visible in the HOST CPU summary card rather than as a second confusing graph line.
+- Response-time chart now shows only individual HTTP response latencies.
+- P50 (median) and P95 remain visible as plain numeric summaries above the response graph; they are no longer drawn as extra horizontal lines.
+- The RedPulse CPU metric now uses the same total-PC-capacity percentage as its graph.
 
-## Understanding percentiles
+## More responsive telemetry
 
-- P50 is the median: 50% of measured HTTP responses completed in this time or less.
-- P95 is the 95th percentile: 95% of measured HTTP responses completed in this time or less; the slowest 5% took longer.
-- Percentile lines summarize all HTTP responses measured so far in the current run. They are statistics, not configured performance limits.
-- Network errors and timeouts are excluded from HTTP response latency percentiles.
+- Host and process CPU, memory and network telemetry are sampled every 500 ms (twice per second).
+- Hardware history retains up to 3,600 samples, preserving 30 minutes at the new sample rate.
+- The dashboard requests a repaint every 50 ms while a test is running.
 
-## Existing engine behavior
+## Clearer Recon action
 
-All HTTP engine features from 0.5.1 remain: editable numeric configuration, Constant Arrival Rate and Closed Loop models, HTTP/1.1 and HTTP/2, optional DNS round-robin routing, backend response-header attribution, live metrics, hardware telemetry, and JSON/CSV reports.
+- Replaces the red Recon button with a standard blue **Start HTTP audit** action.
+- Explains that the audit makes six read-only HTTP requests to inspect headers, cookies, public metadata and allowed methods.
+- Explicitly states that the Recon module does not run exploit attempts.
 
 Use RedPulse only against systems you own or are explicitly authorized to test. Set a request budget and duration appropriate for the environment before starting a run.
