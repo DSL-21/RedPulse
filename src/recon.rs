@@ -336,9 +336,77 @@ fn analyze_cors(headers: &HeaderMap, findings: &mut Vec<Finding>) {
     }
 }
 
+fn analyze_edge_signatures(headers: &HeaderMap, findings: &mut Vec<Finding>) {
+    let server = header_text(headers, "server").unwrap_or_default().to_ascii_lowercase();
+
+    let signatures = [
+        (
+            server.contains("cloudflare")
+                || headers.contains_key("cf-ray")
+                || headers.contains_key("cf-cache-status")
+                || headers.contains_key("cf-mitigated"),
+            "Cloudflare edge signature observed",
+            "Cloudflare response markers were present.",
+            "This identifies a Cloudflare edge service only; it does not prove that WAF, bot protection or specific rules are enabled.",
+        ),
+        (
+            headers.contains_key("x-sucuri-id") || server.contains("sucuri"),
+            "Sucuri edge signature observed",
+            "A Sucuri response marker was present.",
+            "This identifies a Sucuri service marker only; verify active security policies in the provider console.",
+        ),
+        (
+            headers.contains_key("x-iinfo")
+                || headers.get_all(SET_COOKIE).iter().any(|value| {
+                    value.to_str().is_ok_and(|cookie| {
+                        let lower = cookie.to_ascii_lowercase();
+                        lower.contains("incap_ses") || lower.contains("visid_incap")
+                    })
+                }),
+            "Imperva edge signature observed",
+            "An Imperva response header or cookie marker was present.",
+            "This is a provider fingerprint, not proof that a particular WAF policy blocked or inspected the request.",
+        ),
+        (
+            headers.contains_key("x-akamai-transformed")
+                || headers.contains_key("akamai-grn"),
+            "Akamai edge signature observed",
+            "An Akamai response marker was present.",
+            "This identifies an Akamai edge marker only; it does not confirm the active protection configuration.",
+        ),
+        (
+            headers.contains_key("x-served-by")
+                || headers.contains_key("x-timer"),
+            "Fastly edge signature observed",
+            "A Fastly-style response marker was present.",
+            "This identifies an edge delivery marker; it does not prove that a WAF policy is enabled.",
+        ),
+        (
+            headers.contains_key("x-amzn-waf-action"),
+            "AWS WAF action header observed",
+            "The response included x-amzn-waf-action.",
+            "Correlate the action with AWS WAF logs and the rule group configuration.",
+        ),
+    ];
+
+    for (observed, title, evidence, recommendation) in signatures {
+        if observed {
+            add_finding(
+                findings,
+                Severity::Info,
+                "Edge / WAF signal",
+                title,
+                evidence,
+                recommendation,
+            );
+        }
+    }
+}
+
 fn analyze_headers(url: &Url, headers: &HeaderMap, body: &str, findings: &mut Vec<Finding>) {
     let is_https = url.scheme() == "https";
     let csp = header_text(headers, "content-security-policy");
+    analyze_edge_signatures(headers, findings);
 
     if is_https && headers.get("strict-transport-security").is_none() {
         add_finding(
@@ -698,6 +766,36 @@ pub fn run_assessment(target: &str) -> Result<ReconReport, String> {
 fn analyze_probe_results(url: &Url, probes: &[ProbeResult], findings: &mut Vec<Finding>) {
     for probe in probes {
         if let Some(status) = probe.status {
+            let protection_signal = match status {
+                401 => Some((
+                    "HTTP 401 response observed",
+                    "The endpoint required authentication for this request.",
+                )),
+                403 => Some((
+                    "HTTP 403 response observed",
+                    "The endpoint denied this request. The response may come from the application, an access policy or an edge security service.",
+                )),
+                429 => Some((
+                    "HTTP 429 rate-limit response observed",
+                    "The endpoint asked the client to slow down or stop sending requests.",
+                )),
+                503 => Some((
+                    "HTTP 503 response observed",
+                    "The endpoint reported temporary unavailability; this alone does not identify a WAF or DDoS mitigation action.",
+                )),
+                _ => None,
+            };
+            if let Some((title, evidence)) = protection_signal {
+                add_finding(
+                    findings,
+                    Severity::Info,
+                    "Protection signals",
+                    title,
+                    format!("{} {} returned HTTP {status}. {evidence}", probe.method, probe.path),
+                    "Correlate the response with application, load-balancer and WAF logs before attributing it to a particular protection layer.",
+                );
+            }
+
             if status == 200 && probe.path.ends_with("security.txt") {
                 add_finding(
                     findings,
@@ -950,6 +1048,43 @@ mod tests {
         let mut findings = Vec::new();
         analyze_headers(&http, &headers, "", &mut findings);
         assert!(!findings.iter().any(|f| f.title.contains("HSTS")));
+    }
+
+    #[test]
+    fn identifies_cloudflare_edge_markers_without_claiming_waf_is_enabled() {
+        let mut headers = HeaderMap::new();
+        headers.insert("server", HeaderValue::from_static("cloudflare"));
+        headers.insert("cf-ray", HeaderValue::from_static("example-ray-id"));
+        let mut findings = Vec::new();
+
+        analyze_edge_signatures(&headers, &mut findings);
+
+        let finding = findings
+            .iter()
+            .find(|finding| finding.title.contains("Cloudflare"))
+            .expect("Cloudflare edge signal");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(finding.recommendation.contains("does not prove"));
+    }
+
+    #[test]
+    fn reports_rate_limit_responses_as_observations_not_waf_proof() {
+        let probes = vec![ProbeResult {
+            method: "GET".into(),
+            path: "/".into(),
+            status: Some(429),
+            elapsed_ms: 10.0,
+            bytes_read: 0,
+            note: "Too Many Requests".into(),
+        }];
+        let mut findings = Vec::new();
+        analyze_probe_results(&url(), &probes, &mut findings);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.title.contains("429"))
+            .expect("rate limit observation");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(finding.recommendation.contains("Correlate"));
     }
 
     #[test]
