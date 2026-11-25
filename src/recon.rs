@@ -173,7 +173,7 @@ impl ReconState {
         );
         ui.label(
             egui::RichText::new(
-                "Map the exposed HTTP surface and inspect common security controls.",
+                "A lightweight, read-only HTTP check of headers, cookies, public metadata and allowed methods.",
             )
             .color(egui::Color32::from_rgb(143, 160, 181)),
         );
@@ -201,8 +201,8 @@ impl ReconState {
                     if ui
                         .add_enabled(
                             !self.running && !self.target.trim().is_empty(),
-                            egui::Button::new("◈  Run recon")
-                                .fill(egui::Color32::from_rgb(150, 48, 61)),
+                            egui::Button::new("▶  Start HTTP audit")
+                                .fill(egui::Color32::from_rgb(34, 125, 190)),
                         )
                         .clicked()
                     {
@@ -231,7 +231,7 @@ impl ReconState {
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new(
-                        "6 fixed probes · sequential · 250 ms interval · 5 s timeout · no redirect following",
+                        "6 read-only requests · 250 ms spacing · 5 s timeout · redirects disabled · no exploit attempts",
                     )
                     .small()
                     .color(egui::Color32::from_rgb(137, 157, 181)),
