@@ -7,6 +7,7 @@ use crate::engine::{DnsStrategy, EngineStats, HardwareSample, Sample};
 
 #[derive(Serialize)]
 pub struct RunConfig<'a> {
+    pub profile: &'a str,
     pub target: &'a str,
     pub method: &'a str,
     pub workers: usize,
