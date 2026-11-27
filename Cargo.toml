@@ -1,8 +1,8 @@
 [package]
 name = "redpulse"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
-description = "Guided HTTP performance, load-balancer and protection testing in Rust"
+description = "Rust HTTP performance and infrastructure testing with volatile session history"
 license = "MIT"
 
 [dependencies]
