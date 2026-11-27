@@ -351,10 +351,7 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
 
 #[cfg(test)]
 mod session_history_tests {
-    use super::{
-        MAX_SESSION_MEMORY_BYTES, MAX_SESSION_RUNS, SessionEntry, SessionHistory,
-        export_session_json,
-    };
+    use super::{MAX_SESSION_RUNS, SessionEntry, SessionHistory, export_session_json};
 
     fn entry(id: u64, payload: String) -> SessionEntry {
         SessionEntry {
