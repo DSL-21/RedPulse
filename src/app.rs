@@ -747,12 +747,7 @@ impl RedPulseApp {
             .inner_margin(egui::Margin::same(11))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(
-                    egui::RichText::new(label)
-                        .size(9.5)
-                        .strong()
-                        .color(muted),
-                );
+                ui.label(egui::RichText::new(label).size(9.5).strong().color(muted));
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
                     ui.label(
@@ -762,11 +757,7 @@ impl RedPulseApp {
                             .color(egui::Color32::from_rgb(236, 243, 251)),
                     );
                     if !unit.is_empty() {
-                        ui.label(
-                            egui::RichText::new(unit)
-                                .size(10.0)
-                                .color(muted),
-                        );
+                        ui.label(egui::RichText::new(unit).size(10.0).color(muted));
                     }
                 });
             });
@@ -863,7 +854,10 @@ impl RedPulseApp {
                 };
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(28, 40, 55))
-                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(47, 66, 88)))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgb(47, 66, 88),
+                    ))
                     .corner_radius(16)
                     .inner_margin(egui::Margin::symmetric(12, 7))
                     .show(ui, |ui| {
@@ -893,9 +887,13 @@ impl RedPulseApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new(if idle { "EDIT BEFORE START" } else { "LOCKED DURING RUN" })
-                                .size(9.0)
-                                .color(muted),
+                            egui::RichText::new(if idle {
+                                "EDIT BEFORE START"
+                            } else {
+                                "LOCKED DURING RUN"
+                            })
+                            .size(9.0)
+                            .color(muted),
                         );
                     });
                 });
@@ -965,7 +963,11 @@ impl RedPulseApp {
                                 .desired_width(f32::INFINITY)
                                 .font(egui::TextStyle::Monospace),
                         );
-                        ui.label(egui::RichText::new("Concurrent requests").size(9.5).color(muted));
+                        ui.label(
+                            egui::RichText::new("Concurrent requests")
+                                .size(9.5)
+                                .color(muted),
+                        );
                     });
                     columns[1].vertical(|ui| {
                         ui.label(egui::RichText::new("Duration").strong());
@@ -985,7 +987,11 @@ impl RedPulseApp {
                                 .desired_width(f32::INFINITY)
                                 .font(egui::TextStyle::Monospace),
                         );
-                        ui.label(egui::RichText::new("Requests / second").size(9.5).color(muted));
+                        ui.label(
+                            egui::RichText::new("Requests / second")
+                                .size(9.5)
+                                .color(muted),
+                        );
                     });
                     columns[3].vertical(|ui| {
                         ui.label(egui::RichText::new("Request budget").strong());
@@ -995,7 +1001,11 @@ impl RedPulseApp {
                                 .desired_width(f32::INFINITY)
                                 .font(egui::TextStyle::Monospace),
                         );
-                        ui.label(egui::RichText::new("Total scheduled").size(9.5).color(muted));
+                        ui.label(
+                            egui::RichText::new("Total scheduled")
+                                .size(9.5)
+                                .color(muted),
+                        );
                     });
                 });
 
@@ -1011,8 +1021,16 @@ impl RedPulseApp {
                                         .selected_text(self.load_model.label())
                                         .width(190.0)
                                         .show_ui(ui, |ui| {
-                                            ui.selectable_value(&mut self.load_model, LoadModel::ConstantArrivalRate, "Constant Arrival Rate");
-                                            ui.selectable_value(&mut self.load_model, LoadModel::ClosedLoop, "Closed Loop");
+                                            ui.selectable_value(
+                                                &mut self.load_model,
+                                                LoadModel::ConstantArrivalRate,
+                                                "Constant Arrival Rate",
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.load_model,
+                                                LoadModel::ClosedLoop,
+                                                "Closed Loop",
+                                            );
                                         });
                                 });
                                 ui.vertical(|ui| {
@@ -1021,8 +1039,16 @@ impl RedPulseApp {
                                         .selected_text(&self.method)
                                         .width(100.0)
                                         .show_ui(ui, |ui| {
-                                            ui.selectable_value(&mut self.method, "GET".into(), "GET");
-                                            ui.selectable_value(&mut self.method, "POST".into(), "POST");
+                                            ui.selectable_value(
+                                                &mut self.method,
+                                                "GET".into(),
+                                                "GET",
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.method,
+                                                "POST".into(),
+                                                "POST",
+                                            );
                                         });
                                 });
                                 ui.vertical(|ui| {
@@ -1047,8 +1073,16 @@ impl RedPulseApp {
                                         .selected_text(self.dns_strategy.label())
                                         .width(190.0)
                                         .show_ui(ui, |ui| {
-                                            ui.selectable_value(&mut self.dns_strategy, DnsStrategy::System, DnsStrategy::System.label());
-                                            ui.selectable_value(&mut self.dns_strategy, DnsStrategy::RoundRobin, DnsStrategy::RoundRobin.label());
+                                            ui.selectable_value(
+                                                &mut self.dns_strategy,
+                                                DnsStrategy::System,
+                                                DnsStrategy::System.label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.dns_strategy,
+                                                DnsStrategy::RoundRobin,
+                                                DnsStrategy::RoundRobin.label(),
+                                            );
                                         });
                                 });
                                 ui.vertical(|ui| {
@@ -1113,9 +1147,13 @@ impl RedPulseApp {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new(if idle { "Ready to run" } else { "Configuration locked" })
-                                .size(10.0)
-                                .color(muted),
+                            egui::RichText::new(if idle {
+                                "Ready to run"
+                            } else {
+                                "Configuration locked"
+                            })
+                            .size(10.0)
+                            .color(muted),
                         );
                     });
                 });
@@ -1125,7 +1163,10 @@ impl RedPulseApp {
             ui.add_space(7.0);
             egui::Frame::new()
                 .fill(egui::Color32::from_rgb(48, 28, 35))
-                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(125, 61, 73)))
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgb(125, 61, 73),
+                ))
                 .corner_radius(9)
                 .inner_margin(egui::Margin::same(9))
                 .show(ui, |ui| {
@@ -1158,19 +1199,50 @@ impl RedPulseApp {
             self.total_success as f64 * 100.0 / self.total_received as f64
         };
         ui.columns(4, |columns| {
-            Self::metric_card(&mut columns[0], "REQUESTS COMPLETED", self.total_received, "");
-            Self::metric_card(&mut columns[1], "THROUGHPUT", format!("{:.2}", self.observed_rps()), "req/s");
+            Self::metric_card(
+                &mut columns[0],
+                "REQUESTS COMPLETED",
+                self.total_received,
+                "",
+            );
+            Self::metric_card(
+                &mut columns[1],
+                "THROUGHPUT",
+                format!("{:.2}", self.observed_rps()),
+                "req/s",
+            );
             Self::metric_card(&mut columns[2], "P95 LATENCY", format!("{p95:.1}"), "ms");
-            Self::metric_card(&mut columns[3], "HTTP 2XX RATE", format!("{success_rate:.1}"), "%");
+            Self::metric_card(
+                &mut columns[3],
+                "HTTP 2XX RATE",
+                format!("{success_rate:.1}"),
+                "%",
+            );
         });
 
         ui.add_space(7.0);
         ui.horizontal_wrapped(|ui| {
             for (label, value, color) in [
-                ("2xx", self.total_success, egui::Color32::from_rgb(92, 196, 145)),
-                ("3xx", self.total_redirects, egui::Color32::from_rgb(113, 174, 230)),
-                ("4xx", self.total_http_4xx, egui::Color32::from_rgb(229, 183, 92)),
-                ("5xx", self.total_http_5xx, egui::Color32::from_rgb(231, 119, 126)),
+                (
+                    "2xx",
+                    self.total_success,
+                    egui::Color32::from_rgb(92, 196, 145),
+                ),
+                (
+                    "3xx",
+                    self.total_redirects,
+                    egui::Color32::from_rgb(113, 174, 230),
+                ),
+                (
+                    "4xx",
+                    self.total_http_4xx,
+                    egui::Color32::from_rgb(229, 183, 92),
+                ),
+                (
+                    "5xx",
+                    self.total_http_5xx,
+                    egui::Color32::from_rgb(231, 119, 126),
+                ),
                 ("Network errors", self.total_network_errors, muted),
             ] {
                 ui.label(
@@ -1192,9 +1264,21 @@ impl RedPulseApp {
                 .inner_margin(egui::Margin::same(12))
                 .show(&mut columns[0], |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("RESPONSE LATENCY").strong().size(10.0).color(egui::Color32::from_rgb(159, 180, 204)));
+                        ui.label(
+                            egui::RichText::new("RESPONSE LATENCY")
+                                .strong()
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(159, 180, 204)),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new(format!("{} retained", self.recent_latencies.len())).size(9.5).color(muted));
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} retained",
+                                    self.recent_latencies.len()
+                                ))
+                                .size(9.5)
+                                .color(muted),
+                            );
                         });
                     });
                     ui.add_space(4.0);
@@ -1211,7 +1295,8 @@ impl RedPulseApp {
                         ui.label(egui::RichText::new("Waiting for HTTP responses").color(muted));
                         ui.add_space(22.0);
                     } else {
-                        let points: PlotPoints = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
+                        let points: PlotPoints =
+                            downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
                         Plot::new("latency_plot")
                             .height(205.0)
                             .show_x(true)
@@ -1234,9 +1319,11 @@ impl RedPulseApp {
                             });
                     }
                     ui.label(
-                        egui::RichText::new("Percentiles include HTTP responses and exclude transport failures.")
-                            .size(9.5)
-                            .color(muted),
+                        egui::RichText::new(
+                            "Percentiles include HTTP responses and exclude transport failures.",
+                        )
+                        .size(9.5)
+                        .color(muted),
                     );
                 });
 
@@ -1246,9 +1333,15 @@ impl RedPulseApp {
                 .corner_radius(12)
                 .inner_margin(egui::Margin::same(12))
                 .show(&mut columns[1], |ui| {
-                    ui.label(egui::RichText::new("GENERATOR HEALTH").strong().size(10.0).color(egui::Color32::from_rgb(159, 180, 204)));
+                    ui.label(
+                        egui::RichText::new("GENERATOR HEALTH")
+                            .strong()
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(159, 180, 204)),
+                    );
                     if let Some(hardware) = self.hardware_samples.back() {
-                        let process_memory_mb = hardware.process_memory_bytes
+                        let process_memory_mb = hardware
+                            .process_memory_bytes
                             .map(|bytes| bytes as f64 / 1_048_576.0);
                         let process_cpu_capacity = normalized_process_cpu_percent(
                             hardware.process_cpu_percent,
@@ -1256,33 +1349,59 @@ impl RedPulseApp {
                         );
                         ui.add_space(7.0);
                         ui.columns(2, |metrics| {
-                            Self::metric_card(&mut metrics[0], "HOST CPU", format!("{:.1}", hardware.system_cpu_percent), "%");
-                            Self::metric_card(&mut metrics[1], "REDPULSE CPU", format!("{process_cpu_capacity:.1}"), "%");
+                            Self::metric_card(
+                                &mut metrics[0],
+                                "HOST CPU",
+                                format!("{:.1}", hardware.system_cpu_percent),
+                                "%",
+                            );
+                            Self::metric_card(
+                                &mut metrics[1],
+                                "REDPULSE CPU",
+                                format!("{process_cpu_capacity:.1}"),
+                                "%",
+                            );
                         });
                         ui.add_space(6.0);
                         ui.columns(2, |metrics| {
                             Self::metric_card(
                                 &mut metrics[0],
                                 "PROCESS MEMORY",
-                                process_memory_mb.map(|value| format!("{value:.1}")).unwrap_or_else(|| "—".into()),
+                                process_memory_mb
+                                    .map(|value| format!("{value:.1}"))
+                                    .unwrap_or_else(|| "—".into()),
                                 "MB",
                             );
                             Self::metric_card(
                                 &mut metrics[1],
                                 "HOST RAM",
-                                format!("{:.1}", if hardware.system_memory_total_bytes == 0 { 0.0 } else {
-                                    hardware.system_memory_used_bytes as f64 / hardware.system_memory_total_bytes as f64 * 100.0
-                                }),
+                                format!(
+                                    "{:.1}",
+                                    if hardware.system_memory_total_bytes == 0 {
+                                        0.0
+                                    } else {
+                                        hardware.system_memory_used_bytes as f64
+                                            / hardware.system_memory_total_bytes as f64
+                                            * 100.0
+                                    }
+                                ),
                                 "% used",
                             );
                         });
                         ui.add_space(7.0);
-                        let cpu_points: PlotPoints = self.hardware_samples.iter().map(|sample| {
-                            [
-                                sample.elapsed_ms as f64 / 1000.0,
-                                normalized_process_cpu_percent(sample.process_cpu_percent, sample.logical_cores) as f64,
-                            ]
-                        }).collect();
+                        let cpu_points: PlotPoints = self
+                            .hardware_samples
+                            .iter()
+                            .map(|sample| {
+                                [
+                                    sample.elapsed_ms as f64 / 1000.0,
+                                    normalized_process_cpu_percent(
+                                        sample.process_cpu_percent,
+                                        sample.logical_cores,
+                                    ) as f64,
+                                ]
+                            })
+                            .collect();
                         Plot::new("hardware_cpu_plot")
                             .height(116.0)
                             .show_x(false)
@@ -1302,14 +1421,22 @@ impl RedPulseApp {
                                 );
                             });
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(egui::RichText::new(format!(
-                                "Network RX  {:.2} MB/s",
-                                hardware.network_rx_bytes_per_sec as f64 / 1_048_576.0
-                            )).size(9.5).color(muted));
-                            ui.label(egui::RichText::new(format!(
-                                "Network TX  {:.2} MB/s",
-                                hardware.network_tx_bytes_per_sec as f64 / 1_048_576.0
-                            )).size(9.5).color(muted));
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Network RX  {:.2} MB/s",
+                                    hardware.network_rx_bytes_per_sec as f64 / 1_048_576.0
+                                ))
+                                .size(9.5)
+                                .color(muted),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Network TX  {:.2} MB/s",
+                                    hardware.network_tx_bytes_per_sec as f64 / 1_048_576.0
+                                ))
+                                .size(9.5)
+                                .color(muted),
+                            );
                         });
                         if hardware.system_cpu_percent >= 95.0 || process_cpu_capacity >= 85.0 {
                             ui.add_space(5.0);
@@ -1320,7 +1447,12 @@ impl RedPulseApp {
                         }
                     } else {
                         ui.add_space(28.0);
-                        ui.label(egui::RichText::new("Hardware measurements appear after the first telemetry sample.").color(muted));
+                        ui.label(
+                            egui::RichText::new(
+                                "Hardware measurements appear after the first telemetry sample.",
+                            )
+                            .color(muted),
+                        );
                         ui.add_space(28.0);
                     }
                 });
@@ -1787,16 +1919,13 @@ impl eframe::App for RedPulseApp {
                     let selected = self.tab == tab;
                     let response = ui.add_sized(
                         [ui.available_width(), 34.0],
-                        egui::Button::new(
-                            egui::RichText::new(label)
-                                .size(12.0)
-                                .strong()
-                                .color(if selected {
-                                    egui::Color32::from_rgb(230, 241, 251)
-                                } else {
-                                    muted
-                                }),
-                        )
+                        egui::Button::new(egui::RichText::new(label).size(12.0).strong().color(
+                            if selected {
+                                egui::Color32::from_rgb(230, 241, 251)
+                            } else {
+                                muted
+                            },
+                        ))
                         .fill(if selected {
                             egui::Color32::from_rgb(29, 47, 65)
                         } else {
