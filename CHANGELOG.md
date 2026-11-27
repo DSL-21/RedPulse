@@ -2,6 +2,26 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.6.1] - 2026-11-27
+
+### Added
+- Volatile session history for completed Performance, Load Balancer, and Protection runs.
+- One manual Session JSON export that bundles all retained completed runs, including HTTP request samples, hardware telemetry, protection probes and findings.
+- Session metadata and HTTP latency summaries (RPS, min, average, P50, P95, P99, max) in the JSON payload.
+- Session-history UI showing run count, approximate memory use, retained run entries, and any evicted older runs.
+
+### Improved
+- Session history remains in RAM only and is never automatically written to disk.
+- Bounded retention to 50 runs or 64 MiB, removing the oldest entries first to prevent unlimited memory growth.
+- Added an explicit Clear session action.
+- CSV export now clearly targets the current HTTP run only; JSON export targets the full retained session.
+- Removed chart hover X/Y coordinate labels and cursor crosshairs for a cleaner dashboard.
+
+### Notes
+- Closing RedPulse releases the volatile in-app history. A Session JSON file created by manual export remains on disk until the user deletes it.
+- When session limits are reached, older entries are evicted and the UI reports the count.
+
+
 ## [0.6.0] - 2026-11-25
 
 ### Added
