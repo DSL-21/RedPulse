@@ -1051,7 +1051,7 @@ impl RedPulseApp {
                 );
                 ui.add_enabled_ui(self.running.is_none(), |ui| {
                     ui.add_sized(
-                        [ui.available_width(), 36.0],
+                        [ui.available_width().min(560.0), 34.0],
                         egui::TextEdit::singleline(&mut self.target)
                             .hint_text("https://your-authorized-target.example")
                             .font(egui::TextStyle::Monospace),
@@ -1477,9 +1477,10 @@ impl RedPulseApp {
                             .color(egui::Color32::from_rgb(103, 210, 164)));
                     });
                     Plot::new("hardware_cpu_plot")
-                        .height(155.0)
-                        .show_x(true)
-                        .show_y(true)
+                        .height(125.0)
+                        .show_x(false)
+                        .show_y(false)
+                        .cursor_color(egui::Color32::TRANSPARENT)
                         .allow_zoom(false)
                         .allow_scroll(false)
                         .allow_drag(false)
@@ -1597,9 +1598,10 @@ impl RedPulseApp {
                             .color(egui::Color32::from_rgb(103, 210, 164)));
                     });
                     Plot::new("latency_plot")
-                        .height(220.0)
-                        .show_x(true)
-                        .show_y(true)
+                        .height(190.0)
+                        .show_x(false)
+                        .show_y(false)
+                        .cursor_color(egui::Color32::TRANSPARENT)
                         .allow_zoom(false)
                         .allow_scroll(false)
                         .allow_drag(false)

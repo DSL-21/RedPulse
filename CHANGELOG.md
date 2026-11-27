@@ -2,6 +2,17 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.6.5] - 2026-11-27
+
+### Fixed
+- Restored hidden chart hover X/Y readouts and transparent cursor lines to remove the coordinate overlay from live plots.
+- Returned CPU and response-latency plots to more compact heights.
+- Limited the Target Endpoint field to a 560 px maximum width while remaining responsive on narrower windows.
+
+### Notes
+- No changes to HTTP request generation, scheduling, test profiles, measurements, or report data.
+
+
 ## [0.6.4] - 2026-11-27
 
 ### Improved

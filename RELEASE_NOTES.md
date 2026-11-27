@@ -1,15 +1,14 @@
-# RedPulse 0.6.4
+# RedPulse 0.6.5
 
-RedPulse 0.6.4 corrects the scope of the previous dashboard update: the established application layout is restored, and the changes focus only on the line charts.
+RedPulse 0.6.5 is a focused interface correction based on the latest Traffic Lab review.
 
-## Line charts
-- Restored the Traffic Lab and workspace layout from v0.6.2; no broad GUI rearrangement.
-- The latency chart overlays individual response samples with a 7-response rolling median to make the underlying trend easier to read.
-- The latency chart uses a robust recent-P95-focused visual scale. Samples above that visual range are capped only in the chart, with the clipped count and actual peak displayed. Raw latency statistics, request samples and exports are unchanged.
-- The process CPU chart overlays instantaneous utilization with a 7-sample rolling median and shows elapsed-time and CPU axes.
+## Interface corrections
+- The Target Endpoint field now has a 560 px maximum width instead of stretching across the entire configuration card.
+- Hidden the chart hover X/Y coordinate readouts and cursor lines again, removing the floating coordinate overlay.
+- Returned the CPU and response-latency plots to compact heights closer to the earlier dashboard layout.
+- Kept the existing line series and measured values; no additional user-facing features were added.
 
 ## Compatibility
-- No changes to HTTP request generation, load scheduling, test profiles, measurements, routing or reporting behavior.
-- Existing bounded queues, sample retention and memory safeguards remain unchanged.
+- No changes to HTTP request generation, scheduling, profiles, measurement semantics, or report exports.
 
 Use RedPulse only against systems you own or are explicitly authorized to test.
