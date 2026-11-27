@@ -13,7 +13,23 @@ use crate::{
     recon::ReconReport,
 };
 
+#[derive(Clone, Debug, Serialize)]
+pub struct RouteSummary {
+    pub identifier: String,
+    pub requests: u64,
+    pub errors: u64,
+    pub average_latency_ms: Option<f64>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
+pub struct ProtectionStatusSummary {
+    pub http_401_unauthorized: u64,
+    pub http_403_forbidden: u64,
+    pub http_429_rate_limited: u64,
+    pub http_503_unavailable: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct RunSummary {
     pub completed_http_responses: u64,
     pub observed_rps: f64,
@@ -23,6 +39,9 @@ pub struct RunSummary {
     pub p95_latency_ms: Option<f64>,
     pub p99_latency_ms: Option<f64>,
     pub max_latency_ms: Option<f64>,
+    pub protection_statuses: ProtectionStatusSummary,
+    pub destination_ip_distribution: Vec<RouteSummary>,
+    pub backend_distribution: Vec<RouteSummary>,
 }
 
 #[derive(Serialize)]
