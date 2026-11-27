@@ -234,6 +234,9 @@ pub struct RedPulseApp {
     status: String,
     error: Option<String>,
     last_export: Option<String>,
+    session_history: report::SessionHistory,
+    next_session_run_id: u64,
+    session_started_at: String,
     total_received: u64,
     total_success: u64,
     total_redirects: u64,
@@ -309,6 +312,9 @@ impl RedPulseApp {
             status: "Ready".into(),
             error: None,
             last_export: None,
+            session_history: report::SessionHistory::default(),
+            next_session_run_id: 1,
+            session_started_at: chrono::Utc::now().to_rfc3339(),
             total_received: 0,
             total_success: 0,
             total_redirects: 0,
@@ -344,6 +350,77 @@ impl RedPulseApp {
                 self.dns_strategy = DnsStrategy::System;
                 self.method = "GET".into();
             }
+        }
+    }
+
+    fn next_session_id(&mut self) -> u64 {
+        let id = self.next_session_run_id;
+        self.next_session_run_id = self.next_session_run_id.saturating_add(1);
+        id
+    }
+
+    fn keep_session_entry(&mut self, entry: report::SessionEntry) {
+        if !self.session_history.push(entry) {
+            self.error = Some(
+                "This run exceeded the 64 MiB session-memory budget and was not retained. You can still export the current run separately.".into(),
+            );
+        }
+    }
+
+    fn record_completed_traffic_run(&mut self) {
+        let Some(run) = self.last_run.as_ref() else {
+            return;
+        };
+        let (average, minimum, p50, p95, p99, maximum) = self.metrics();
+        let has_http_responses = self.http_response_count > 0;
+        let summary = report::RunSummary {
+            completed_http_responses: self.http_response_count,
+            observed_rps: self.observed_rps(),
+            min_latency_ms: has_http_responses.then_some(minimum),
+            average_latency_ms: has_http_responses.then_some(average),
+            p50_latency_ms: has_http_responses.then_some(p50),
+            p95_latency_ms: has_http_responses.then_some(p95),
+            p99_latency_ms: has_http_responses.then_some(p99),
+            max_latency_ms: has_http_responses.then_some(maximum),
+        };
+        let config = report::RunConfig {
+            profile: run.profile.label(),
+            target: &run.target,
+            method: &run.method,
+            workers: run.workers,
+            duration_secs: run.duration_secs,
+            request_rate: run.request_rate,
+            load_model: run.load_model,
+            timeout_secs: run.timeout_secs,
+            actual_elapsed_secs: run.actual_elapsed_secs,
+            max_total_requests: run.max_total_requests,
+            dns_strategy: run.dns_strategy,
+            backend_id_header: &run.backend_id_header,
+            resolved_addresses: &run.resolved_addresses,
+            stats: self.engine_stats,
+            summary,
+            hardware_samples: &self.hardware_samples,
+        };
+        let id = self.next_session_id();
+        match report::make_traffic_session_entry(id, &config, &self.samples) {
+            Ok(entry) => self.keep_session_entry(entry),
+            Err(error) => self.error = Some(format!("Could not retain completed test: {error}")),
+        }
+    }
+
+    fn record_protection_result(
+        &mut self,
+        target: String,
+        result: Result<recon::ReconReport, String>,
+    ) {
+        let id = self.next_session_id();
+        let entry = match result {
+            Ok(report) => report::make_protection_session_entry(id, &report),
+            Err(error) => report::make_protection_error_entry(id, &target, &error),
+        };
+        match entry {
+            Ok(entry) => self.keep_session_entry(entry),
+            Err(error) => self.error = Some(format!("Could not retain protection audit: {error}")),
         }
     }
 
@@ -578,6 +655,7 @@ impl RedPulseApp {
                 handle.join();
             }
             self.started = None;
+            self.record_completed_traffic_run();
         }
 
         if let Some(started) = self.started {
@@ -614,35 +692,15 @@ impl RedPulseApp {
 
     fn export(&mut self, csv: bool) {
         let path = PathBuf::from(if csv {
-            "redpulse-report.csv"
+            "redpulse-current-run.csv"
         } else {
-            "redpulse-report.json"
+            "redpulse-session.json"
         });
-        let all_samples: Vec<Sample> = self.samples.iter().cloned().collect();
-        let hardware_samples: Vec<_> = self.hardware_samples.iter().cloned().collect();
         let result = if csv {
+            let all_samples: Vec<Sample> = self.samples.iter().cloned().collect();
             report::export_csv(&path, &all_samples)
-        } else if let Some(run) = &self.last_run {
-            let config = report::RunConfig {
-                profile: run.profile.label(),
-                target: &run.target,
-                method: &run.method,
-                workers: run.workers,
-                duration_secs: run.duration_secs,
-                request_rate: run.request_rate,
-                load_model: run.load_model,
-                timeout_secs: run.timeout_secs,
-                actual_elapsed_secs: run.actual_elapsed_secs,
-                max_total_requests: run.max_total_requests,
-                dns_strategy: run.dns_strategy,
-                backend_id_header: &run.backend_id_header,
-                resolved_addresses: &run.resolved_addresses,
-                stats: self.engine_stats,
-                hardware_samples: &hardware_samples,
-            };
-            report::export_json(&path, &config, &all_samples)
         } else {
-            Err(anyhow::anyhow!("There is no test run to export."))
+            report::export_session_json(&path, &self.session_history, &self.session_started_at)
         };
         match result {
             Ok(()) => self.last_export = Some(format!("Saved {}", path.display())),
@@ -1187,6 +1245,9 @@ impl RedPulseApp {
                 })
                 .collect();
             Plot::new("hardware_cpu_plot")
+                .show_x(false)
+                .show_y(false)
+                .show_crosshair(false)
                 .height(110.0)
                 .allow_zoom(false)
                 .allow_scroll(false)
@@ -1330,6 +1391,9 @@ impl RedPulseApp {
             ui.label("Waiting for HTTP response samples…");
         } else {
             let plot = Plot::new("latency_plot")
+                .show_x(false)
+                .show_y(false)
+                .show_crosshair(false)
                 .height(175.0)
                 // Keep the chart fixed: mouse wheel and pointer gestures must
                 // scroll the surrounding dashboard, never alter plot bounds.
@@ -1408,17 +1472,79 @@ impl RedPulseApp {
                     }
                 });
         }
-        ui.horizontal(|ui| {
-            if ui.button("Export JSON").clicked() {
-                self.export(false);
-            }
-            if ui.button("Export CSV").clicked() {
-                self.export(true);
-            }
-            if let Some(message) = &self.last_export {
-                ui.label(message);
-            }
-        });
+        egui::Frame::group(ui.style())
+            .fill(egui::Color32::from_rgb(22, 29, 41))
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 61, 81)))
+            .corner_radius(12)
+            .inner_margin(12)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new("SESSION HISTORY")
+                            .strong()
+                            .color(egui::Color32::from_rgb(145, 183, 219)),
+                    );
+                    ui.label(format!(
+                        "{} runs · {:.2} / 64 MB · RAM only",
+                        self.session_history.len(),
+                        self.session_history.memory_bytes() as f64 / 1_048_576.0
+                    ));
+                    if self.session_history.evicted_runs() > 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(238, 178, 82),
+                            format!("{} older runs removed at memory limit", self.session_history.evicted_runs()),
+                        );
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "Completed Performance, Load Balancer and Protection tests stay in memory only. Nothing is saved automatically; the history disappears when RedPulse closes.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(137, 157, 181)),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!self.session_history.is_empty(), egui::Button::new("Export session JSON"))
+                        .clicked()
+                    {
+                        self.export(false);
+                    }
+                    if ui
+                        .add_enabled(!self.samples.is_empty(), egui::Button::new("Export current CSV"))
+                        .clicked()
+                    {
+                        self.export(true);
+                    }
+                    if ui
+                        .add_enabled(!self.session_history.is_empty(), egui::Button::new("Clear session"))
+                        .clicked()
+                    {
+                        self.session_history.clear();
+                        self.last_export = None;
+                    }
+                    if let Some(message) = &self.last_export {
+                        ui.label(message);
+                    }
+                });
+                egui::CollapsingHeader::new(format!("Previous tests ({})", self.session_history.len()))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for entry in self.session_history.entries().iter().rev().take(12) {
+                            ui.label(format!(
+                                "#{} · {} · {} · {:.1} KB · {}",
+                                entry.id,
+                                entry.profile,
+                                entry.target,
+                                entry.payload_bytes() as f64 / 1024.0,
+                                entry.completed_at
+                            ));
+                        }
+                        if self.session_history.len() > 12 {
+                            ui.label(format!("{} earlier runs are retained in the session JSON.", self.session_history.len() - 12));
+                        }
+                    });
+            });
 
         ui.add_space(8.0);
         let (avg, min, p50, p95, p99, max) = self.metrics();
@@ -1594,7 +1720,11 @@ impl RedPulseApp {
 impl eframe::App for RedPulseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_engine();
-        if self.running.is_some() {
+        self.recon.poll();
+        if let Some((target, result)) = self.recon.take_completed_result() {
+            self.record_protection_result(target, result);
+        }
+        if self.running.is_some() || self.recon.is_running() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
 
