@@ -404,7 +404,7 @@ impl RedPulseApp {
                 summary,
                 hardware_samples: &self.hardware_samples,
             };
-            report::make_traffic_session_entry(id, &config, &self.samples)
+            report::make_traffic_session_entry(id, &config, &self.samples, &self.status)
         };
         match entry {
             Ok(entry) => self.keep_session_entry(entry),
@@ -1498,7 +1498,7 @@ impl RedPulseApp {
                 });
                 ui.label(
                     egui::RichText::new(
-                        "Completed Performance, Load Balancer and Protection tests stay in memory only. Nothing is saved automatically; the history disappears when RedPulse closes.",
+                        "Completed Performance, Load Balancer and Protection tests stay in memory only. Nothing is saved automatically; the history disappears when RedPulse closes. Manual JSON export creates a separate file that remains until you delete it.",
                     )
                     .small()
                     .color(egui::Color32::from_rgb(137, 157, 181)),
@@ -1517,10 +1517,12 @@ impl RedPulseApp {
                         self.export(true);
                     }
                     if ui
-                        .add_enabled(!self.session_history.is_empty(), egui::Button::new("Clear session"))
+                        .add_enabled(!self.session_history.is_empty(), egui::Button::new("Clear session history"))
                         .clicked()
                     {
                         self.session_history.clear();
+                        self.next_session_run_id = 1;
+                        self.session_started_at = chrono::Utc::now().to_rfc3339();
                         self.last_export = None;
                     }
                     if let Some(message) = &self.last_export {
@@ -1532,9 +1534,11 @@ impl RedPulseApp {
                     .show(ui, |ui| {
                         for entry in self.session_history.entries().iter().rev().take(12) {
                             ui.label(format!(
-                                "#{} · {} · {} · {:.1} KB · {}",
+                                "#{} · {} · {} · {} · {:.1} KB · {}",
                                 entry.id,
                                 entry.profile,
+                                entry.kind,
+                                entry.outcome,
                                 entry.target,
                                 entry.payload_bytes() as f64 / 1024.0,
                                 entry.completed_at
