@@ -215,7 +215,7 @@ fn rolling_median(points: &[[f64; 2]], requested_window: usize) -> Vec<[f64; 2]>
     }
 
     let mut window = requested_window.max(3).min(points.len());
-    if window % 2 == 0 {
+    if window & 1 == 0 {
         window -= 1;
     }
     let radius = window / 2;
@@ -235,7 +235,7 @@ fn rolling_median(points: &[[f64; 2]], requested_window: usize) -> Vec<[f64; 2]>
 
         values.sort_by(f64::total_cmp);
         let middle = values.len() / 2;
-        let median = if values.len() % 2 == 0 {
+        let median = if values.len() & 1 == 0 {
             (values[middle - 1] + values[middle]) / 2.0
         } else {
             values[middle]
