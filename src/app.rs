@@ -198,9 +198,7 @@ fn latency_plot_scale(points: &VecDeque<(f64, f64)>) -> (f64, usize, f64) {
     }
 
     let p95_index = ((values.len() - 1) * 95) / 100;
-    let p95 = *values
-        .select_nth_unstable_by(p95_index, f64::total_cmp)
-        .1;
+    let p95 = *values.select_nth_unstable_by(p95_index, f64::total_cmp).1;
     let axis_max = nice_axis_ceiling((p95 * 1.35).max(10.0));
     let clipped = values.iter().filter(|value| **value > axis_max).count();
 
@@ -810,8 +808,7 @@ impl RedPulseApp {
             });
         if self.chart_cache.latency_dirty && latency_due {
             let raw_points = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS);
-            let (axis_max, clipped_samples, peak_ms) =
-                latency_plot_scale(&self.recent_latencies);
+            let (axis_max, clipped_samples, peak_ms) = latency_plot_scale(&self.recent_latencies);
             let visible_points = clip_plot_series(&raw_points, axis_max);
             let trend_points = rolling_median(&visible_points, 7);
 
@@ -1711,8 +1708,6 @@ impl RedPulseApp {
             ui.label(egui::RichText::new("No backend ID was observed. Destination IP distribution is measured, but private backend distribution cannot be confirmed without a response header such as X-Backend-ID.")
                 .small().color(muted));
         }
-
-
     }
 
     fn results_ui(&mut self, ui: &mut egui::Ui) {
