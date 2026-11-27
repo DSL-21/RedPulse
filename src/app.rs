@@ -2205,12 +2205,7 @@ mod chart_downsampling_tests {
 
     #[test]
     fn short_latency_series_keeps_its_full_peak_in_view() {
-        let points = VecDeque::from([
-            (0.0, 100.0),
-            (0.5, 120.0),
-            (1.0, 1_000.0),
-            (1.5, 110.0),
-        ]);
+        let points = VecDeque::from([(0.0, 100.0), (0.5, 120.0), (1.0, 1_000.0), (1.5, 110.0)]);
         let (axis_max, clipped, peak) = latency_plot_scale(&points);
         assert!(axis_max >= peak);
         assert_eq!(clipped, 0);
