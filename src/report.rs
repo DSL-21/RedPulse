@@ -145,6 +145,7 @@ struct SessionHeader {
     application: &'static str,
     version: &'static str,
     generated_at: String,
+    session_started_at: String,
     storage: &'static str,
     automatic_persistence: bool,
     run_count: usize,
@@ -228,6 +229,7 @@ pub fn make_protection_error_entry(id: u64, target: &str, error: &str) -> Result
 pub fn export_session_json(
     path: &Path,
     history: &SessionHistory,
+    session_started_at: &str,
 ) -> Result<()> {
     if history.is_empty() {
         anyhow::bail!("There are no completed tests in the current session.");
@@ -237,6 +239,7 @@ pub fn export_session_json(
         application: "RedPulse",
         version: env!("CARGO_PKG_VERSION"),
         generated_at: chrono::Utc::now().to_rfc3339(),
+        session_started_at: session_started_at.to_owned(),
         storage: "volatile RAM session history",
         automatic_persistence: false,
         run_count: history.len(),
@@ -322,4 +325,68 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     }
     file.flush()?;
     Ok(())
+}
+
+
+#[cfg(test)]
+mod session_history_tests {
+    use super::{MAX_SESSION_MEMORY_BYTES, MAX_SESSION_RUNS, SessionEntry, SessionHistory, export_session_json};
+
+    fn entry(id: u64, payload: String) -> SessionEntry {
+        SessionEntry {
+            id,
+            kind: "traffic_test".into(),
+            profile: "Performance".into(),
+            target: "https://example.test/".into(),
+            completed_at: "2026-11-27T00:00:00Z".into(),
+            payload_json: payload,
+        }
+    }
+
+    #[test]
+    fn session_history_keeps_only_the_newest_entries_when_run_limit_is_reached() {
+        let mut history = SessionHistory::default();
+        for id in 1..=(MAX_SESSION_RUNS as u64 + 1) {
+            assert!(history.push(entry(id, r#"{"ok":true}"#.into())));
+        }
+
+        assert_eq!(history.len(), MAX_SESSION_RUNS);
+        assert_eq!(history.evicted_runs(), 1);
+        assert_eq!(history.entries().front().map(|run| run.id), Some(2));
+        assert_eq!(history.entries().back().map(|run| run.id), Some(MAX_SESSION_RUNS as u64 + 1));
+    }
+
+    #[test]
+    fn session_history_rejects_an_entry_larger_than_its_memory_budget() {
+        let mut history = SessionHistory::default();
+        let oversized = "x".repeat(MAX_SESSION_MEMORY_BYTES + 1);
+        assert!(!history.push(entry(1, oversized)));
+        assert!(history.is_empty());
+        assert_eq!(history.evicted_runs(), 1);
+    }
+
+    #[test]
+    fn session_export_contains_every_profile_as_structured_json() {
+        let mut history = SessionHistory::default();
+        history.push(entry(1, r#"{"samples":[{"status":200}]}"#.into()));
+        let mut protection = entry(2, r#"{"findings":[{"title":"HSTS"}]}"#.into());
+        protection.kind = "protection_audit".into();
+        protection.profile = "Protection".into();
+        history.push(protection);
+
+        let path = std::env::temp_dir().join(format!(
+            "redpulse-session-test-{}.json",
+            std::process::id()
+        ));
+        export_session_json(&path, &history, "2026-11-27T00:00:00Z").expect("write session report");
+        let text = std::fs::read_to_string(&path).expect("read session report");
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid session JSON");
+        assert_eq!(parsed["run_count"], 2);
+        assert_eq!(parsed["automatic_persistence"], false);
+        assert_eq!(parsed["runs"][0]["profile"], "Performance");
+        assert_eq!(parsed["runs"][0]["data"]["samples"][0]["status"], 200);
+        assert_eq!(parsed["runs"][1]["profile"], "Protection");
+        assert_eq!(parsed["runs"][1]["data"]["findings"][0]["title"], "HSTS");
+        let _ = std::fs::remove_file(path);
+    }
 }
