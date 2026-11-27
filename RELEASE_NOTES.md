@@ -12,6 +12,7 @@ RedPulse 0.6.2 focuses on a clearer Traffic Lab interface and more reliable test
 - Stop auxiliary statistics and hardware-monitor tasks as soon as the workload has finished, including when the configured request budget is reached before the duration deadline.
 - Preserve the distinction between a run that completed its configured budget and a run explicitly stopped by the user.
 - Add a regression test for early request-budget completion.
+- Preserve latency histogram samples above 60 seconds and test long-duration percentile recording.
 - Keep bounded queues, response-body measurement limits and volatile session retention as stability safeguards.
 
 Use RedPulse only against systems you own or are explicitly authorized to test.

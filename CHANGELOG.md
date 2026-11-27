@@ -14,6 +14,7 @@ All notable RedPulse changes are documented here.
 - Auxiliary telemetry and statistics tasks now stop when the configured request budget is reached, instead of waiting for the full duration deadline.
 - Kept request-budget completion distinct from explicit user cancellation.
 - Added a regression test for early request-budget completion.
+- Removed the one-minute latency histogram cap and added coverage for long-duration samples.
 
 ### Notes
 - Memory bounds, bounded queues and request/response measurement safeguards remain intentional stability protections.

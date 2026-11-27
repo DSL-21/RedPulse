@@ -602,7 +602,7 @@ impl RedPulseApp {
             );
 
             let micros = (sample.latency_ms * 1000.0).max(1.0) as u64;
-            let _ = self.histogram.record(micros.min(60_000_000));
+            let _ = self.histogram.record(micros);
 
             if self.recent_latencies.len() == MAX_UI_SAMPLES {
                 self.recent_latencies.pop_front();
@@ -1097,8 +1097,13 @@ impl RedPulseApp {
                                 });
                             });
                             ui.label(
+                                egui::RichText::new(self.dns_strategy.description())
+                                    .small()
+                                    .color(muted),
+                            );
+                            ui.label(
                                 egui::RichText::new(
-                                    "Round-robin selects resolved destination IPs. A backend identifier is counted only when your application returns the configured response header.",
+                                    "A backend identifier is counted only when your application returns the configured response header.",
                                 )
                                 .small()
                                 .color(muted),
@@ -1257,7 +1262,7 @@ impl RedPulseApp {
             let _ = (min, p50, p95, p99, max);
         });
 
-        let (avg, min, p50, p95, p99, max) = self.metrics();
+        let (_, min, p50, p95, p99, max) = self.metrics();
         ui.label(
             egui::RichText::new(format!(
                 "HTTP latency: min {min:.1} ms   ·   P50 {p50:.1} ms   ·   P95 {p95:.1} ms   ·   P99 {p99:.1} ms   ·   max {max:.1} ms"
@@ -2015,6 +2020,23 @@ mod load_model_ui_tests {
             "Constant Arrival Rate"
         );
         assert_eq!(LoadModel::ClosedLoop.label(), "Closed Loop");
+    }
+}
+
+#[cfg(test)]
+mod latency_histogram_tests {
+    use super::Histogram;
+
+    #[test]
+    fn latency_histogram_preserves_samples_beyond_one_minute() {
+        let mut histogram = Histogram::<u64>::new(3).expect("valid histogram configuration");
+        histogram
+            .record(120_000_000)
+            .expect("two-minute latency should be representable");
+        assert!(
+            histogram.value_at_quantile(1.0) > 60_000_000,
+            "latency percentiles must not be silently capped at one minute"
+        );
     }
 }
 
