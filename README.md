@@ -26,7 +26,10 @@ Open [GitHub Releases](https://github.com/DSL-21/RedPulse/releases) and download
 - Simple, single-line CPU and response-time charts. The graphs show RedPulse CPU usage and individual HTTP response times; P50/P95 stay in a compact text summary.
 - Min, average, P50, P95, P99 and max response latency.
 - Request accounting: scheduled, started, completed, queued, in-flight, cancelled and dropped.
-- JSON and CSV export of retained samples.
+- Session history for completed Performance, Load Balancer and Protection runs, held in RAM only.
+- One manual Session JSON export containing all retained runs, including HTTP samples, hardware samples, protection probes and findings.
+- CSV export for the current HTTP run.
+- Session retention is bounded to 50 runs or 64 MiB, whichever is reached first; oldest entries are removed first.
 - Immediate cancellation and redirect following disabled.
 - System DNS mode or round-robin routing across DNS-resolved IPv4/IPv6 addresses.
 - Direct pinned-IP connections that preserve the original URL hostname for HTTP Host and TLS SNI.
@@ -118,7 +121,7 @@ A useful benchmark should identify whether the generator, network path, or targe
 
 For each completed request, RedPulse records elapsed time, response latency, HTTP status, measured response bytes, and transport/body-read errors. HTTP latency percentiles include HTTP responses (including 4xx and 5xx) and exclude transport failures. Redirects are not followed, so the configured endpoint response is measured directly.
 
-The interface retains the most recent 10,000 request samples and the most recent 10,000 chart points for display and export; aggregate counters and latency histogram statistics continue to cover the full run. The response body measurement limit is 2 MiB per request. POST JSON bodies are validated and limited to 256 KiB. These are per-sample memory/measurement safeguards, not global request-rate or worker ceilings.
+The interface retains the most recent 10,000 request samples and the most recent 10,000 chart points for display and export; aggregate counters and latency histogram statistics continue to cover the full run. Completed tests are serialized into compact in-memory session entries. RedPulse retains at most 50 entries and at most 64 MiB of serialized run data; when a limit is reached, the oldest entries are removed and the UI reports how many were evicted. The response body measurement limit is 2 MiB per request. POST JSON bodies are validated and limited to 256 KiB. These are per-sample memory/measurement safeguards, not global request-rate or worker ceilings.
 
 ## Build from source
 
@@ -145,10 +148,20 @@ The Windows executable is written to:
 target/x86_64-pc-windows-msvc/release/redpulse.exe
 ```
 
+## Session history and temporary storage
+
+Completed Performance, Load Balancer and Protection runs are retained in the current process memory only. RedPulse does not create an automatic history file, local database, cache or background log. Closing the application releases the session history.
+
+The in-memory history is bounded to 50 completed runs or 64 MiB of serialized run data, whichever limit is reached first. If a limit is reached, the oldest entries are removed and the UI reports the number removed. The current run remains available in the Results view independently of the session-history cap.
+
+Use **Export session JSON** to manually write one JSON file containing all runs still retained in the current session. Each entry contains its profile, target, completion time and complete result data. HTTP runs include configuration, counters, latency summary, retained request samples, origin/backend identifiers and hardware samples. Protection audits include their probes, findings and DNS addresses. **Export current CSV** writes request rows from the current HTTP run only.
+
+Manual export creates a normal file on disk (by default `redpulse-session.json` in the application's working directory). That exported file remains after RedPulse closes until you delete it yourself. The in-app RAM history, however, is not persisted automatically and disappears when the application exits.
+
 ## Reports
 
-- **JSON** contains application metadata, target, method, configured worker count, traffic model, configured request budget, generation timestamp, final counters, retained request samples (including origin IP, negotiated HTTP protocol, and optional backend identity), and retained hardware samples.
-- **CSV** contains one row per retained request sample, including selected origin IP, negotiated HTTP protocol, optional backend identity, status class, and correctly quoted text fields. Hardware history is currently included in JSON, not the request-row CSV.
+- **Session JSON** contains every completed HTTP run and Protection audit retained in the current RAM session, with profile and run metadata. HTTP run payloads include counters, latency summary, request samples and hardware samples; Protection payloads include DNS, probe results and findings.
+- **Current-run CSV** contains one row per retained request sample from the latest HTTP run, including selected origin IP, negotiated protocol, optional backend identity, status class and correctly quoted text fields.
 
 Reports are written to the application's current working directory using `redpulse-report.json` and `redpulse-report.csv`.
 
