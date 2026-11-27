@@ -1500,7 +1500,7 @@ impl RedPulseApp {
         }
         egui::Frame::group(ui.style())
             .fill(egui::Color32::from_rgb(22, 29, 41))
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 61, 81)))
+            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 61, 81)))
             .corner_radius(12)
             .inner_margin(12)
             .show(ui, |ui| {
