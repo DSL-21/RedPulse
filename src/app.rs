@@ -13,7 +13,7 @@ use crate::{
         self, DEFAULT_MAX_TOTAL_REQUESTS, DnsStrategy, EngineEvent, EngineStats, HardwareSample,
         LoadModel, MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
     },
-    recon::ReconState,
+    recon::{ReconReport, ReconState},
     report,
 };
 
@@ -368,10 +368,13 @@ impl RedPulseApp {
     }
 
     fn record_completed_traffic_run(&mut self) {
-        let Some(run) = self.last_run.as_ref() else {
+        if self.last_run.is_none() {
             return;
-        };
-        let (average, minimum, p50, p95, p99, maximum) = self.metrics();
+        }
+        let id = self.next_session_id();
+        let entry = {
+            let run = self.last_run.as_ref().expect("checked above");
+            let (average, minimum, p50, p95, p99, maximum) = self.metrics();
         let has_http_responses = self.http_response_count > 0;
         let summary = report::RunSummary {
             completed_http_responses: self.http_response_count,
@@ -383,8 +386,8 @@ impl RedPulseApp {
             p99_latency_ms: has_http_responses.then_some(p99),
             max_latency_ms: has_http_responses.then_some(maximum),
         };
-        let config = report::RunConfig {
-            profile: run.profile.label(),
+            let config = report::RunConfig {
+                profile: run.profile.label(),
             target: &run.target,
             method: &run.method,
             workers: run.workers,
@@ -399,10 +402,11 @@ impl RedPulseApp {
             resolved_addresses: &run.resolved_addresses,
             stats: self.engine_stats,
             summary,
-            hardware_samples: &self.hardware_samples,
+                hardware_samples: &self.hardware_samples,
+            };
+            report::make_traffic_session_entry(id, &config, &self.samples)
         };
-        let id = self.next_session_id();
-        match report::make_traffic_session_entry(id, &config, &self.samples) {
+        match entry {
             Ok(entry) => self.keep_session_entry(entry),
             Err(error) => self.error = Some(format!("Could not retain completed test: {error}")),
         }
@@ -411,7 +415,7 @@ impl RedPulseApp {
     fn record_protection_result(
         &mut self,
         target: String,
-        result: Result<recon::ReconReport, String>,
+        result: Result<ReconReport, String>,
     ) {
         let id = self.next_session_id();
         let entry = match result {
