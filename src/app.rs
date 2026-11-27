@@ -385,6 +385,32 @@ impl RedPulseApp {
                 p95_latency_ms: has_http_responses.then_some(p95),
                 p99_latency_ms: has_http_responses.then_some(p99),
                 max_latency_ms: has_http_responses.then_some(maximum),
+                protection_statuses: report::ProtectionStatusSummary {
+                    http_401_unauthorized: self.total_unauthorized,
+                    http_403_forbidden: self.total_forbidden,
+                    http_429_rate_limited: self.total_rate_limited,
+                    http_503_unavailable: self.total_unavailable,
+                },
+                destination_ip_distribution: self
+                    .origin_metrics
+                    .iter()
+                    .map(|(identifier, metric)| report::RouteSummary {
+                        identifier: identifier.clone(),
+                        requests: metric.requests,
+                        errors: metric.errors,
+                        average_latency_ms: metric.average_latency_ms(),
+                    })
+                    .collect(),
+                backend_distribution: self
+                    .backend_metrics
+                    .iter()
+                    .map(|(identifier, metric)| report::RouteSummary {
+                        identifier: identifier.clone(),
+                        requests: metric.requests,
+                        errors: metric.errors,
+                        average_latency_ms: metric.average_latency_ms(),
+                    })
+                    .collect(),
             };
             let config = report::RunConfig {
                 profile: run.profile.label(),
