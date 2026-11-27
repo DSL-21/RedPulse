@@ -60,6 +60,7 @@ pub struct SessionEntry {
     pub id: u64,
     pub kind: String,
     pub profile: String,
+    pub outcome: String,
     pub target: String,
     pub completed_at: String,
     payload_json: String,
@@ -70,6 +71,7 @@ impl SessionEntry {
         self.payload_json.len()
             + self.kind.len()
             + self.profile.len()
+            + self.outcome.len()
             + self.target.len()
             + self.completed_at.len()
             + std::mem::size_of::<Self>()
@@ -168,6 +170,7 @@ struct SessionRunMetadata<'a> {
     id: u64,
     kind: &'a str,
     profile: &'a str,
+    outcome: &'a str,
     target: &'a str,
     completed_at: &'a str,
 }
@@ -176,6 +179,7 @@ pub fn make_traffic_session_entry(
     id: u64,
     config: &RunConfig<'_>,
     samples: &VecDeque<Sample>,
+    outcome: &str,
 ) -> Result<SessionEntry> {
     let completed_at = chrono::Utc::now().to_rfc3339();
     let payload = TrafficRunPayload {
@@ -192,6 +196,7 @@ pub fn make_traffic_session_entry(
         id,
         kind: "traffic_test".into(),
         profile: config.profile.to_owned(),
+        outcome: outcome.to_owned(),
         target: config.target.to_owned(),
         completed_at,
         payload_json,
@@ -205,6 +210,7 @@ pub fn make_protection_session_entry(id: u64, report: &ReconReport) -> Result<Se
         id,
         kind: "protection_audit".into(),
         profile: "Protection".into(),
+        outcome: if report.stopped_early { "completed_with_early_stop" } else { "completed" }.into(),
         target: report.target.clone(),
         completed_at: report.generated_at.to_rfc3339(),
         payload_json,
@@ -229,6 +235,7 @@ pub fn make_protection_error_entry(id: u64, target: &str, error: &str) -> Result
         id,
         kind: "protection_audit".into(),
         profile: "Protection".into(),
+        outcome: "failed".into(),
         target: target.to_owned(),
         completed_at: chrono::Utc::now().to_rfc3339(),
         payload_json,
@@ -272,6 +279,7 @@ pub fn export_session_json(
             id: entry.id,
             kind: &entry.kind,
             profile: &entry.profile,
+            outcome: &entry.outcome,
             target: &entry.target,
             completed_at: &entry.completed_at,
         };
@@ -348,6 +356,7 @@ mod session_history_tests {
             id,
             kind: "traffic_test".into(),
             profile: "Performance".into(),
+            outcome: "completed".into(),
             target: "https://example.test/".into(),
             completed_at: "2026-11-27T00:00:00Z".into(),
             payload_json: payload,
@@ -386,6 +395,7 @@ mod session_history_tests {
         let mut protection = entry(2, r#"{"findings":[{"title":"HSTS"}]}"#.into());
         protection.kind = "protection_audit".into();
         protection.profile = "Protection".into();
+        protection.outcome = "completed".into();
         history.push(protection);
 
         let path =
