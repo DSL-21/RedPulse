@@ -896,21 +896,27 @@ impl RedPulseApp {
                     ui.horizontal_wrapped(|ui| {
                         let mut selected_profile = self.profile;
                         let mut changed = false;
-                        changed |= ui
+                        if ui
                             .selectable_label(selected_profile == TestProfile::Performance, "  Performance  ")
                             .clicked()
-                            .then(|| selected_profile = TestProfile::Performance)
-                            .is_some();
-                        changed |= ui
+                        {
+                            selected_profile = TestProfile::Performance;
+                            changed = true;
+                        }
+                        if ui
                             .selectable_label(selected_profile == TestProfile::LoadBalancer, "  Load Balancer  ")
                             .clicked()
-                            .then(|| selected_profile = TestProfile::LoadBalancer)
-                            .is_some();
-                        changed |= ui
+                        {
+                            selected_profile = TestProfile::LoadBalancer;
+                            changed = true;
+                        }
+                        if ui
                             .selectable_label(selected_profile == TestProfile::Protection, "  Protection  ")
                             .clicked()
-                            .then(|| selected_profile = TestProfile::Protection)
-                            .is_some();
+                        {
+                            selected_profile = TestProfile::Protection;
+                            changed = true;
+                        }
                         if changed {
                             self.profile = selected_profile;
                             self.apply_profile_defaults();
@@ -954,12 +960,14 @@ impl RedPulseApp {
                         .strong()
                         .color(egui::Color32::from_rgb(158, 180, 205)),
                 );
-                ui.add_sized(
-                    [ui.available_width(), 36.0],
-                    egui::TextEdit::singleline(&mut self.target)
-                        .hint_text("https://your-authorized-target.example")
-                        .font(egui::TextStyle::Monospace),
-                );
+                ui.add_enabled_ui(self.running.is_none(), |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), 36.0],
+                        egui::TextEdit::singleline(&mut self.target)
+                            .hint_text("https://your-authorized-target.example")
+                            .font(egui::TextStyle::Monospace),
+                    );
+                });
                 ui.label(
                     egui::RichText::new("Run tests only against infrastructure you own or have explicit permission to assess.")
                         .small()
@@ -975,13 +983,12 @@ impl RedPulseApp {
                 );
                 ui.add_space(5.0);
                 ui.columns(4, |columns| {
-                    for (column, label, hint, value) in [
-                        (0, "Workers", "Concurrent requests", self.workers_input.as_str()),
-                        (1, "Duration", "Seconds", self.duration_input.as_str()),
-                        (2, "Arrival rate", "Requests / second", self.rps_input.as_str()),
-                        (3, "Request budget", "Total scheduled requests", self.max_requests_input.as_str()),
+                    for (column, label, hint) in [
+                        (0, "Workers", "Concurrent requests"),
+                        (1, "Duration", "Seconds"),
+                        (2, "Arrival rate", "Requests / second"),
+                        (3, "Request budget", "Total scheduled requests"),
                     ] {
-                        let _ = value;
                         columns[column].vertical(|ui| {
                             ui.label(
                                 egui::RichText::new(label)
