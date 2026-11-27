@@ -735,10 +735,15 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
             return;
         };
         let _ = tx.send(EngineEvent::Started { at: started });
+        // Auxiliary monitors must stop when the workload finishes, even if
+        // the configured duration has not elapsed (for example, the request
+        // budget was reached early). Keep this separate from the user stop flag
+        // so Finished.stopped continues to mean an explicit cancellation.
+        let monitor_shutdown = Arc::new(AtomicBool::new(false));
         let hardware_monitor = spawn_hardware_monitor(
             started,
             deadline,
-            Arc::clone(&stop),
+            Arc::clone(&monitor_shutdown),
             tx.clone(),
         );
 
@@ -795,7 +800,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         let stats_task = {
             let stats_tx = tx.clone();
             let stats_counters = Arc::clone(&counters);
-            let stats_stop = Arc::clone(&stop);
+            let stats_stop = Arc::clone(&monitor_shutdown);
             tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(Duration::from_millis(250));
                 loop {
@@ -1002,6 +1007,7 @@ fn run_engine(config: TestConfig, stop: Arc<AtomicBool>, tx: Sender<EngineEvent>
         // Capture the measured workload duration before joining telemetry
         // helpers so monitor shutdown cannot inflate observed RPS.
         let measured_elapsed_secs = started.elapsed().as_secs_f64();
+        monitor_shutdown.store(true, Ordering::Relaxed);
         drop(sample_tx);
         let _ = sample_publisher.await;
         if let Some(monitor) = hardware_monitor {
@@ -1442,6 +1448,59 @@ mod tests {
             "timeout should be classified clearly"
         );
         assert!(sample.elapsed_us >= 900_000);
+    }
+
+    #[test]
+    fn request_budget_completion_stops_auxiliary_monitors_before_duration_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind budget test server");
+        let address = listener.local_addr().expect("budget test server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept budget test request");
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .expect("write budget test response");
+            stream.flush().expect("flush budget test response");
+        });
+
+        let mut cfg = config(&format!("http://{address}/"));
+        cfg.load_model = LoadModel::ClosedLoop;
+        cfg.workers = 1;
+        cfg.duration_secs = 30;
+        cfg.max_total_requests = 1;
+        cfg.timeout_secs = 3;
+        let mut handle = start(cfg).expect("start budget completion benchmark");
+        let test_started = Instant::now();
+
+        let stats = loop {
+            match handle
+                .rx
+                .recv_timeout(Duration::from_secs(4))
+                .expect("request-budget run should finish before the 30-second deadline")
+            {
+                EngineEvent::OriginsResolved { .. }
+                | EngineEvent::Started { .. }
+                | EngineEvent::Stats(_)
+                | EngineEvent::Samples(_)
+                | EngineEvent::Hardware(_) => {}
+                EngineEvent::Finished { stats, stopped, .. } => {
+                    assert!(!stopped, "request-budget completion is not a user cancellation");
+                    break stats;
+                }
+                EngineEvent::Fatal(message) => panic!("budget completion failed: {message}"),
+            }
+        };
+
+        handle.join();
+        server.join().expect("budget test server thread");
+        assert!(test_started.elapsed() < Duration::from_secs(4));
+        assert_eq!(stats.scheduled, 1);
+        assert_eq!(stats.started, 1);
+        assert_eq!(stats.completed, 1);
+        assert_eq!(stats.cancelled, 0);
+        assert_eq!(stats.dropped, 0);
+        assert!(stats.limit_reached);
     }
 
     #[test]

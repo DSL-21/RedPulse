@@ -2,6 +2,22 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.6.2] - 2026-11-27
+
+### Improved
+- Reorganized Traffic Lab into clearer configuration, measurements, request accounting, telemetry, routing and latency sections.
+- Improved dashboard hierarchy, spacing, metric grouping and field labels without adding new user-facing features.
+- Locked all test configuration controls while a run is active to keep the displayed configuration consistent with the active engine run.
+- Clarified that aggregate metrics cover the full run while the on-screen request sample window is retained separately.
+
+### Fixed
+- Auxiliary telemetry and statistics tasks now stop when the configured request budget is reached, instead of waiting for the full duration deadline.
+- Kept request-budget completion distinct from explicit user cancellation.
+- Added a regression test for early request-budget completion.
+
+### Notes
+- Memory bounds, bounded queues and request/response measurement safeguards remain intentional stability protections.
+
 ## [0.6.1] - 2026-11-27
 
 ### Added
