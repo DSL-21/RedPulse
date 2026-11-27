@@ -336,10 +336,12 @@ pub fn export_csv(path: &Path, samples: &[Sample]) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod session_history_tests {
-    use super::{MAX_SESSION_MEMORY_BYTES, MAX_SESSION_RUNS, SessionEntry, SessionHistory, export_session_json};
+    use super::{
+        MAX_SESSION_MEMORY_BYTES, MAX_SESSION_RUNS, SessionEntry, SessionHistory,
+        export_session_json,
+    };
 
     fn entry(id: u64, payload: String) -> SessionEntry {
         SessionEntry {
@@ -362,7 +364,10 @@ mod session_history_tests {
         assert_eq!(history.len(), MAX_SESSION_RUNS);
         assert_eq!(history.evicted_runs(), 1);
         assert_eq!(history.entries().front().map(|run| run.id), Some(2));
-        assert_eq!(history.entries().back().map(|run| run.id), Some(MAX_SESSION_RUNS as u64 + 1));
+        assert_eq!(
+            history.entries().back().map(|run| run.id),
+            Some(MAX_SESSION_RUNS as u64 + 1)
+        );
     }
 
     #[test]
@@ -383,10 +388,8 @@ mod session_history_tests {
         protection.profile = "Protection".into();
         history.push(protection);
 
-        let path = std::env::temp_dir().join(format!(
-            "redpulse-session-test-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("redpulse-session-test-{}.json", std::process::id()));
         export_session_json(&path, &history, "2026-11-27T00:00:00Z").expect("write session report");
         let text = std::fs::read_to_string(&path).expect("read session report");
         let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid session JSON");

@@ -375,33 +375,33 @@ impl RedPulseApp {
         let entry = {
             let run = self.last_run.as_ref().expect("checked above");
             let (average, minimum, p50, p95, p99, maximum) = self.metrics();
-        let has_http_responses = self.http_response_count > 0;
-        let summary = report::RunSummary {
-            completed_http_responses: self.http_response_count,
-            observed_rps: self.observed_rps(),
-            min_latency_ms: has_http_responses.then_some(minimum),
-            average_latency_ms: has_http_responses.then_some(average),
-            p50_latency_ms: has_http_responses.then_some(p50),
-            p95_latency_ms: has_http_responses.then_some(p95),
-            p99_latency_ms: has_http_responses.then_some(p99),
-            max_latency_ms: has_http_responses.then_some(maximum),
-        };
+            let has_http_responses = self.http_response_count > 0;
+            let summary = report::RunSummary {
+                completed_http_responses: self.http_response_count,
+                observed_rps: self.observed_rps(),
+                min_latency_ms: has_http_responses.then_some(minimum),
+                average_latency_ms: has_http_responses.then_some(average),
+                p50_latency_ms: has_http_responses.then_some(p50),
+                p95_latency_ms: has_http_responses.then_some(p95),
+                p99_latency_ms: has_http_responses.then_some(p99),
+                max_latency_ms: has_http_responses.then_some(maximum),
+            };
             let config = report::RunConfig {
                 profile: run.profile.label(),
-            target: &run.target,
-            method: &run.method,
-            workers: run.workers,
-            duration_secs: run.duration_secs,
-            request_rate: run.request_rate,
-            load_model: run.load_model,
-            timeout_secs: run.timeout_secs,
-            actual_elapsed_secs: run.actual_elapsed_secs,
-            max_total_requests: run.max_total_requests,
-            dns_strategy: run.dns_strategy,
-            backend_id_header: &run.backend_id_header,
-            resolved_addresses: &run.resolved_addresses,
-            stats: self.engine_stats,
-            summary,
+                target: &run.target,
+                method: &run.method,
+                workers: run.workers,
+                duration_secs: run.duration_secs,
+                request_rate: run.request_rate,
+                load_model: run.load_model,
+                timeout_secs: run.timeout_secs,
+                actual_elapsed_secs: run.actual_elapsed_secs,
+                max_total_requests: run.max_total_requests,
+                dns_strategy: run.dns_strategy,
+                backend_id_header: &run.backend_id_header,
+                resolved_addresses: &run.resolved_addresses,
+                stats: self.engine_stats,
+                summary,
                 hardware_samples: &self.hardware_samples,
             };
             report::make_traffic_session_entry(id, &config, &self.samples)
@@ -412,11 +412,7 @@ impl RedPulseApp {
         }
     }
 
-    fn record_protection_result(
-        &mut self,
-        target: String,
-        result: Result<ReconReport, String>,
-    ) {
+    fn record_protection_result(&mut self, target: String, result: Result<ReconReport, String>) {
         let id = self.next_session_id();
         let entry = match result {
             Ok(report) => report::make_protection_session_entry(id, &report),
