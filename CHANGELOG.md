@@ -2,6 +2,17 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.6.4] - 2026-11-27
+
+### Improved
+- Restored the v0.6.2 Traffic Lab and workspace layout; this release changes the charts, not the overall application UI.
+- Added a 7-response rolling-median trend over the individual latency line.
+- Scaled the latency plot around its recent P95 range and report high samples clipped at the visual chart boundary; raw metrics, samples and exports remain unchanged.
+- Added a 7-sample rolling-median trend to the process CPU chart with visible time and percentage axes.
+
+### Notes
+- No HTTP workload, request scheduling, test profile, or measurement behavior changes.
+
 ## [0.6.3] - 2026-11-27
 
 ### Improved
