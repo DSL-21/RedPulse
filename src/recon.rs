@@ -92,6 +92,7 @@ pub struct ReconState {
     running: bool,
     receiver: Option<Receiver<Result<ReconReport, String>>>,
     report: Option<ReconReport>,
+    completed_pending: Option<(String, Result<ReconReport, String>)>,
     error: Option<String>,
     status: String,
 }
@@ -103,6 +104,7 @@ impl ReconState {
             running: false,
             receiver: None,
             report: None,
+            completed_pending: None,
             error: None,
             status: "READY".into(),
         }
@@ -114,6 +116,7 @@ impl ReconState {
 
     fn start(&mut self) {
         self.report = None;
+        self.completed_pending = None;
         self.error = None;
         let target = self.target.trim().to_owned();
         let (tx, rx) = mpsc::channel();
@@ -136,7 +139,7 @@ impl ReconState {
         }
     }
 
-    fn poll(&mut self) {
+    pub fn poll(&mut self) {
         let result = self.receiver.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
@@ -155,14 +158,20 @@ impl ReconState {
                     } else {
                         "COMPLETED".into()
                     };
+                    self.completed_pending = Some((report.target.clone(), Ok(report.clone())));
                     self.report = Some(report);
                 }
                 Err(error) => {
                     self.status = "FAILED".into();
+                    self.completed_pending = Some((self.target.clone(), Err(error.clone())));
                     self.error = Some(error);
                 }
             }
         }
+    }
+
+    pub fn take_completed_result(&mut self) -> Option<(String, Result<ReconReport, String>)> {
+        self.completed_pending.take()
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
