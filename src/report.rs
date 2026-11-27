@@ -68,12 +68,12 @@ pub struct SessionEntry {
 
 impl SessionEntry {
     fn memory_bytes(&self) -> usize {
-        self.payload_json.len()
-            + self.kind.len()
-            + self.profile.len()
-            + self.outcome.len()
-            + self.target.len()
-            + self.completed_at.len()
+        self.payload_json.capacity()
+            + self.kind.capacity()
+            + self.profile.capacity()
+            + self.outcome.capacity()
+            + self.target.capacity()
+            + self.completed_at.capacity()
             + std::mem::size_of::<Self>()
     }
 
@@ -160,7 +160,7 @@ struct SessionHeader {
     storage: &'static str,
     automatic_persistence: bool,
     run_count: usize,
-    evicted_older_runs: u64,
+    evicted_runs: u64,
     memory_limit_bytes: usize,
     run_limit: usize,
 }
@@ -259,7 +259,7 @@ pub fn export_session_json(
         storage: "volatile RAM session history",
         automatic_persistence: false,
         run_count: history.len(),
-        evicted_older_runs: history.evicted_runs(),
+        evicted_runs: history.evicted_runs(),
         memory_limit_bytes: MAX_SESSION_MEMORY_BYTES,
         run_limit: MAX_SESSION_RUNS,
     };
