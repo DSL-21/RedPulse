@@ -112,14 +112,23 @@ impl SessionHistory {
     }
 
     pub fn push(&mut self, entry: SessionEntry) -> bool {
+        self.push_with_limits(entry, MAX_SESSION_RUNS, MAX_SESSION_MEMORY_BYTES)
+    }
+
+    fn push_with_limits(
+        &mut self,
+        entry: SessionEntry,
+        max_runs: usize,
+        max_memory_bytes: usize,
+    ) -> bool {
         let entry_bytes = entry.memory_bytes();
-        if entry_bytes > MAX_SESSION_MEMORY_BYTES {
+        if entry_bytes > max_memory_bytes {
             self.evicted_runs = self.evicted_runs.saturating_add(1);
             return false;
         }
 
-        while self.entries.len() >= MAX_SESSION_RUNS
-            || self.memory_bytes.saturating_add(entry_bytes) > MAX_SESSION_MEMORY_BYTES
+        while self.entries.len() >= max_runs
+            || self.memory_bytes.saturating_add(entry_bytes) > max_memory_bytes
         {
             let Some(oldest) = self.entries.pop_front() else {
                 break;
@@ -359,8 +368,8 @@ mod session_history_tests {
     #[test]
     fn session_history_rejects_an_entry_larger_than_its_memory_budget() {
         let mut history = SessionHistory::default();
-        let oversized = "x".repeat(MAX_SESSION_MEMORY_BYTES + 1);
-        assert!(!history.push(entry(1, oversized)));
+        let oversized = "x".repeat(128);
+        assert!(!history.push_with_limits(entry(1, oversized), 5, 64));
         assert!(history.is_empty());
         assert_eq!(history.evicted_runs(), 1);
     }
