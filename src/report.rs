@@ -210,7 +210,12 @@ pub fn make_protection_session_entry(id: u64, report: &ReconReport) -> Result<Se
         id,
         kind: "protection_audit".into(),
         profile: "Protection".into(),
-        outcome: if report.stopped_early { "completed_with_early_stop" } else { "completed" }.into(),
+        outcome: if report.stopped_early {
+            "completed_with_early_stop"
+        } else {
+            "completed"
+        }
+        .into(),
         target: report.target.clone(),
         completed_at: report.generated_at.to_rfc3339(),
         payload_json,
