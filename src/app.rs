@@ -1485,14 +1485,14 @@ impl RedPulseApp {
                             .color(egui::Color32::from_rgb(145, 183, 219)),
                     );
                     ui.label(format!(
-                        "{} runs · {:.2} / 64 MB · RAM only",
+                        "{} runs · {:.2} / 64 MiB · RAM only",
                         self.session_history.len(),
                         self.session_history.memory_bytes() as f64 / 1_048_576.0
                     ));
                     if self.session_history.evicted_runs() > 0 {
                         ui.colored_label(
                             egui::Color32::from_rgb(238, 178, 82),
-                            format!("{} older runs removed at memory limit", self.session_history.evicted_runs()),
+                            format!("{} runs not retained due to the memory limit", self.session_history.evicted_runs()),
                         );
                     }
                 });
@@ -1534,7 +1534,7 @@ impl RedPulseApp {
                     .show(ui, |ui| {
                         for entry in self.session_history.entries().iter().rev().take(12) {
                             ui.label(format!(
-                                "#{} · {} · {} · {} · {:.1} KB · {}",
+                                "#{} · {} · {} · {} · {} · {:.1} KB · {}",
                                 entry.id,
                                 entry.profile,
                                 entry.kind,
