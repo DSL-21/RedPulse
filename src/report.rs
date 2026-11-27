@@ -267,7 +267,7 @@ pub fn export_session_json(
     let mut file = BufWriter::new(File::create(path).context("Could not create session report")?);
     let mut header_json =
         serde_json::to_vec(&header).context("Could not serialize session metadata")?;
-    header_json.pop(); // Replace the closing brace with the runs array.
+    header_json.truncate(header_json.len().saturating_sub(1)); // Replace the closing brace with the runs array.
     file.write_all(&header_json)?;
     file.write_all(b",\"runs\":[")?;
 
@@ -285,7 +285,7 @@ pub fn export_session_json(
         };
         let mut metadata_json =
             serde_json::to_vec(&metadata).context("Could not serialize session run metadata")?;
-        metadata_json.pop();
+        metadata_json.truncate(metadata_json.len().saturating_sub(1));
         file.write_all(&metadata_json)?;
         file.write_all(b",\"data\":")?;
         file.write_all(entry.payload_json.as_bytes())?;
@@ -382,8 +382,8 @@ mod session_history_tests {
     #[test]
     fn session_history_rejects_an_entry_larger_than_its_memory_budget() {
         let mut history = SessionHistory::default();
-        let oversized = "x".repeat(128);
-        assert!(!history.push_with_limits(entry(1, oversized), 5, 64));
+        let oversized = "x".repeat(2048);
+        assert!(!history.push_with_limits(entry(1, oversized), 5, 1024));
         assert!(history.is_empty());
         assert_eq!(history.evicted_runs(), 1);
     }
@@ -404,7 +404,7 @@ mod session_history_tests {
         let text = std::fs::read_to_string(&path).expect("read session report");
         let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid session JSON");
         assert_eq!(parsed["run_count"], 2);
-        assert_eq!(parsed["automatic_persistence"], false);
+        assert!(!parsed["automatic_persistence"].as_bool().unwrap_or(true));
         assert_eq!(parsed["runs"][0]["profile"], "Performance");
         assert_eq!(parsed["runs"][0]["data"]["samples"][0]["status"], 200);
         assert_eq!(parsed["runs"][1]["profile"], "Protection");
