@@ -83,6 +83,9 @@ impl DistributionMetrics {
 const MAX_UI_SAMPLES: usize = 10_000;
 const MAX_PLOT_POINTS: usize = 2_000;
 const MAX_HARDWARE_SAMPLES: usize = 3_600;
+const TARGET_ENDPOINT_MAX_WIDTH: f32 = 320.0;
+const LATENCY_CHART_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const CPU_CHART_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 fn normalized_process_cpu_percent(process_cpu_percent: f32, logical_cores: usize) -> f32 {
     if !process_cpu_percent.is_finite() || process_cpu_percent <= 0.0 {
@@ -117,7 +120,9 @@ fn parse_arrival_rate_input(
 
 fn downsample_min_max(points: &VecDeque<(f64, f64)>, max_points: usize) -> Vec<[f64; 2]> {
     let mut sorted: Vec<[f64; 2]> = points.iter().map(|(x, y)| [*x, *y]).collect();
-    sorted.sort_by(|left, right| left[0].total_cmp(&right[0]));
+    if sorted.windows(2).any(|pair| pair[0][0] > pair[1][0]) {
+        sorted.sort_by(|left, right| left[0].total_cmp(&right[0]));
+    }
 
     if sorted.len() <= max_points {
         return sorted;
@@ -187,14 +192,15 @@ fn latency_plot_scale(points: &VecDeque<(f64, f64)>) -> (f64, usize, f64) {
         return (10.0, 0, 0.0);
     }
 
-    values.sort_by(f64::total_cmp);
-    let peak = *values.last().expect("non-empty latency values");
+    let peak = values.iter().copied().fold(0.0_f64, f64::max);
     if values.len() < 30 {
         return (nice_axis_ceiling((peak * 1.15).max(10.0)), 0, peak);
     }
 
     let p95_index = ((values.len() - 1) * 95) / 100;
-    let p95 = values[p95_index];
+    let p95 = *values
+        .select_nth_unstable_by(p95_index, f64::total_cmp)
+        .1;
     let axis_max = nice_axis_ceiling((p95 * 1.35).max(10.0));
     let clipped = values.iter().filter(|value| **value > axis_max).count();
 
@@ -220,20 +226,23 @@ fn rolling_median(points: &[[f64; 2]], requested_window: usize) -> Vec<[f64; 2]>
     }
     let radius = window / 2;
     let mut trend = Vec::with_capacity(points.len());
+    let mut values = Vec::with_capacity(window);
 
     for index in 0..points.len() {
         let start = index.saturating_sub(radius);
         let end = (index + radius + 1).min(points.len());
-        let mut values: Vec<f64> = points[start..end]
-            .iter()
-            .map(|point| point[1])
-            .filter(|value| value.is_finite())
-            .collect();
+        values.clear();
+        values.extend(
+            points[start..end]
+                .iter()
+                .map(|point| point[1])
+                .filter(|value| value.is_finite()),
+        );
         if values.is_empty() {
             continue;
         }
 
-        values.sort_by(f64::total_cmp);
+        values.sort_unstable_by(f64::total_cmp);
         let middle = values.len() / 2;
         let median = if values.len() & 1 == 0 {
             (values[middle - 1] + values[middle]) / 2.0
@@ -244,6 +253,21 @@ fn rolling_median(points: &[[f64; 2]], requested_window: usize) -> Vec<[f64; 2]>
     }
 
     trend
+}
+
+#[derive(Default)]
+struct ChartCache {
+    latency_dirty: bool,
+    cpu_dirty: bool,
+    last_latency_refresh: Option<Instant>,
+    last_cpu_refresh: Option<Instant>,
+    latency_points: Vec<[f64; 2]>,
+    latency_trend: Vec<[f64; 2]>,
+    latency_axis_max: f64,
+    latency_clipped_samples: usize,
+    latency_peak_ms: f64,
+    cpu_points: Vec<[f64; 2]>,
+    cpu_trend: Vec<[f64; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,6 +332,7 @@ pub struct RedPulseApp {
     samples: VecDeque<Sample>,
     recent_latencies: VecDeque<(f64, f64)>,
     hardware_samples: VecDeque<HardwareSample>,
+    chart_cache: ChartCache,
     resolved_addresses: Vec<String>,
     origin_metrics: BTreeMap<String, DistributionMetrics>,
     backend_metrics: BTreeMap<String, DistributionMetrics>,
@@ -387,6 +412,7 @@ impl RedPulseApp {
             samples: VecDeque::new(),
             recent_latencies: VecDeque::new(),
             hardware_samples: VecDeque::new(),
+            chart_cache: ChartCache::default(),
             resolved_addresses: Vec::new(),
             origin_metrics: BTreeMap::new(),
             backend_metrics: BTreeMap::new(),
@@ -537,6 +563,7 @@ impl RedPulseApp {
         self.samples.clear();
         self.recent_latencies.clear();
         self.hardware_samples.clear();
+        self.chart_cache = ChartCache::default();
         self.resolved_addresses.clear();
         self.origin_metrics.clear();
         self.backend_metrics.clear();
@@ -691,6 +718,7 @@ impl RedPulseApp {
             }
             self.recent_latencies
                 .push_back((sample.elapsed_us as f64 / 1_000_000.0, sample.latency_ms));
+            self.chart_cache.latency_dirty = true;
         }
 
         if self.samples.len() == MAX_UI_SAMPLES {
@@ -732,6 +760,7 @@ impl RedPulseApp {
                         self.hardware_samples.pop_front();
                     }
                     self.hardware_samples.push_back(sample);
+                    self.chart_cache.cpu_dirty = true;
                 }
                 EngineEvent::Finished {
                     stopped,
@@ -769,6 +798,56 @@ impl RedPulseApp {
 
         if let Some(started) = self.started {
             self.elapsed_seconds = started.elapsed().as_secs_f64();
+        }
+    }
+
+    fn refresh_chart_cache(&mut self, force: bool) {
+        let now = Instant::now();
+
+        let latency_due = force
+            || self.chart_cache.last_latency_refresh.is_none_or(|last| {
+                now.saturating_duration_since(last) >= LATENCY_CHART_REFRESH_INTERVAL
+            });
+        if self.chart_cache.latency_dirty && latency_due {
+            let raw_points = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS);
+            let (axis_max, clipped_samples, peak_ms) =
+                latency_plot_scale(&self.recent_latencies);
+            let visible_points = clip_plot_series(&raw_points, axis_max);
+            let trend_points = rolling_median(&visible_points, 7);
+
+            self.chart_cache.latency_points = visible_points;
+            self.chart_cache.latency_trend = trend_points;
+            self.chart_cache.latency_axis_max = axis_max;
+            self.chart_cache.latency_clipped_samples = clipped_samples;
+            self.chart_cache.latency_peak_ms = peak_ms;
+            self.chart_cache.last_latency_refresh = Some(now);
+            self.chart_cache.latency_dirty = false;
+        }
+
+        let cpu_due = force
+            || self.chart_cache.last_cpu_refresh.is_none_or(|last| {
+                now.saturating_duration_since(last) >= CPU_CHART_REFRESH_INTERVAL
+            });
+        if self.chart_cache.cpu_dirty && cpu_due {
+            let points: Vec<[f64; 2]> = self
+                .hardware_samples
+                .iter()
+                .map(|sample| {
+                    [
+                        sample.elapsed_ms as f64 / 1000.0,
+                        normalized_process_cpu_percent(
+                            sample.process_cpu_percent,
+                            sample.logical_cores,
+                        ) as f64,
+                    ]
+                })
+                .collect();
+            let trend = rolling_median(&points, 7);
+
+            self.chart_cache.cpu_points = points;
+            self.chart_cache.cpu_trend = trend;
+            self.chart_cache.last_cpu_refresh = Some(now);
+            self.chart_cache.cpu_dirty = false;
         }
     }
 
@@ -1051,7 +1130,7 @@ impl RedPulseApp {
                 );
                 ui.add_enabled_ui(self.running.is_none(), |ui| {
                     ui.add_sized(
-                        [ui.available_width().min(560.0), 34.0],
+                        [ui.available_width().min(TARGET_ENDPOINT_MAX_WIDTH), 34.0],
                         egui::TextEdit::singleline(&mut self.target)
                             .hint_text("https://your-authorized-target.example")
                             .font(egui::TextStyle::Monospace),
@@ -1463,13 +1542,8 @@ impl RedPulseApp {
                             "Low CPU headroom: the generator or host may be limiting this run. Interpret target results with caution.",
                         );
                     }
-                    let cpu_points: Vec<[f64; 2]> = self.hardware_samples.iter().map(|sample| {
-                        [
-                            sample.elapsed_ms as f64 / 1000.0,
-                            normalized_process_cpu_percent(sample.process_cpu_percent, sample.logical_cores) as f64,
-                        ]
-                    }).collect();
-                    let cpu_trend = rolling_median(&cpu_points, 7);
+                    let cpu_points = &self.chart_cache.cpu_points;
+                    let cpu_trend = &self.chart_cache.cpu_trend;
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("— Instantaneous").small()
                             .color(egui::Color32::from_rgb(91, 170, 225)));
@@ -1504,6 +1578,86 @@ impl RedPulseApp {
                     ui.label(egui::RichText::new("CPU, memory and network telemetry appears after the first half-second sample.")
                         .small().color(muted));
                 }
+            });
+
+        ui.add_space(10.0);
+        egui::Frame::group(ui.style())
+            .fill(card_fill)
+            .stroke(card_stroke)
+            .corner_radius(12)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("RESPONSE LATENCY").strong().color(egui::Color32::from_rgb(158, 180, 205)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(format!("{} retained responses", self.recent_latencies.len())).small().color(muted));
+                    });
+                });
+                if self.http_response_count > 0 {
+                    ui.label(
+                        egui::RichText::new(format!("P50 {p50:.1} ms   ·   P95 {p95:.1} ms"))
+                            .strong()
+                            .color(egui::Color32::from_rgb(214, 228, 244)),
+                    );
+                } else {
+                    ui.label(egui::RichText::new("Waiting for HTTP response measurements…").small().color(muted));
+                }
+                ui.label(egui::RichText::new("Each point represents one completed HTTP response. P50 and P95 are summary values.")
+                    .small().color(muted));
+                let visible_points = &self.chart_cache.latency_points;
+                let trend_points = &self.chart_cache.latency_trend;
+                let latency_axis_max = self.chart_cache.latency_axis_max;
+                let clipped_samples = self.chart_cache.latency_clipped_samples;
+                let peak_latency = self.chart_cache.latency_peak_ms;
+                if self.recent_latencies.is_empty() {
+                    ui.add_space(7.0);
+                    ui.label(egui::RichText::new("No response samples yet.").color(muted));
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("— Individual responses").small()
+                            .color(egui::Color32::from_rgb(91, 170, 225)));
+                        ui.label(egui::RichText::new("— 7-sample median").small()
+                            .color(egui::Color32::from_rgb(103, 210, 164)));
+                    });
+                    Plot::new("latency_plot")
+                        .height(190.0)
+                        .show_x(false)
+                        .show_y(false)
+                        .cursor_color(egui::Color32::TRANSPARENT)
+                        .allow_zoom(false)
+                        .allow_scroll(false)
+                        .allow_drag(false)
+                        .allow_boxed_zoom(false)
+                        .allow_double_click_reset(false)
+                        .x_axis_label("Elapsed (s)")
+                        .y_axis_label("Latency (ms)")
+                        .include_x(0.0)
+                        .include_y(0.0)
+                        .include_y(latency_axis_max)
+                        .show(ui, |plot_ui| {
+                            plot_ui.line(Line::new("Individual responses", visible_points.clone())
+                                .color(egui::Color32::from_rgba_unmultiplied(91, 170, 225, 145))
+                                .width(1.1_f32));
+                            if !trend_points.is_empty() {
+                                plot_ui.line(Line::new("7-sample median", trend_points.clone())
+                                    .color(egui::Color32::from_rgb(103, 210, 164))
+                                    .width(2.6_f32));
+                            }
+                        });
+                    if clipped_samples > 0 {
+                        ui.label(egui::RichText::new(format!(
+                            "Focused scale: 0–{latency_axis_max:.0} ms  ·  {clipped_samples} high-latency samples capped in chart  ·  peak {peak_latency:.1} ms (raw statistics unchanged)"
+                        )).small().color(muted));
+                    } else {
+                        ui.label(egui::RichText::new(
+                            "Individual HTTP responses with a 7-sample rolling median. All raw samples remain unchanged."
+                        ).small().color(muted));
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("Engine elapsed: {:.3}s", self.elapsed_seconds)).small().color(muted));
+                    ui.label(egui::RichText::new(format!("Retained samples: {}", self.samples.len())).small().color(muted));
+                });
             });
 
         if self.dns_strategy == DnsStrategy::RoundRobin {
@@ -1558,85 +1712,7 @@ impl RedPulseApp {
                 .small().color(muted));
         }
 
-        ui.add_space(10.0);
-        egui::Frame::group(ui.style())
-            .fill(card_fill)
-            .stroke(card_stroke)
-            .corner_radius(12)
-            .inner_margin(egui::Margin::same(12))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("RESPONSE LATENCY").strong().color(egui::Color32::from_rgb(158, 180, 205)));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("{} retained responses", self.recent_latencies.len())).small().color(muted));
-                    });
-                });
-                if self.http_response_count > 0 {
-                    ui.label(
-                        egui::RichText::new(format!("P50 {p50:.1} ms   ·   P95 {p95:.1} ms"))
-                            .strong()
-                            .color(egui::Color32::from_rgb(214, 228, 244)),
-                    );
-                } else {
-                    ui.label(egui::RichText::new("Waiting for HTTP response measurements…").small().color(muted));
-                }
-                ui.label(egui::RichText::new("Each point represents one completed HTTP response. P50 and P95 are summary values.")
-                    .small().color(muted));
-                let raw_points = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS);
-                let (latency_axis_max, clipped_samples, peak_latency) =
-                    latency_plot_scale(&self.recent_latencies);
-                let visible_points = clip_plot_series(&raw_points, latency_axis_max);
-                let trend_points = rolling_median(&visible_points, 7);
-                if self.recent_latencies.is_empty() {
-                    ui.add_space(7.0);
-                    ui.label(egui::RichText::new("No response samples yet.").color(muted));
-                } else {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("— Individual responses").small()
-                            .color(egui::Color32::from_rgb(91, 170, 225)));
-                        ui.label(egui::RichText::new("— 7-sample median").small()
-                            .color(egui::Color32::from_rgb(103, 210, 164)));
-                    });
-                    Plot::new("latency_plot")
-                        .height(190.0)
-                        .show_x(false)
-                        .show_y(false)
-                        .cursor_color(egui::Color32::TRANSPARENT)
-                        .allow_zoom(false)
-                        .allow_scroll(false)
-                        .allow_drag(false)
-                        .allow_boxed_zoom(false)
-                        .allow_double_click_reset(false)
-                        .x_axis_label("Elapsed (s)")
-                        .y_axis_label("Latency (ms)")
-                        .include_x(0.0)
-                        .include_y(0.0)
-                        .include_y(latency_axis_max)
-                        .show(ui, |plot_ui| {
-                            plot_ui.line(Line::new("Individual responses", visible_points.clone())
-                                .color(egui::Color32::from_rgba_unmultiplied(91, 170, 225, 145))
-                                .width(1.1_f32));
-                            if !trend_points.is_empty() {
-                                plot_ui.line(Line::new("7-sample median", trend_points.clone())
-                                    .color(egui::Color32::from_rgb(103, 210, 164))
-                                    .width(2.6_f32));
-                            }
-                        });
-                    if clipped_samples > 0 {
-                        ui.label(egui::RichText::new(format!(
-                            "Focused scale: 0–{latency_axis_max:.0} ms  ·  {clipped_samples} high-latency samples capped in chart  ·  peak {peak_latency:.1} ms (raw statistics unchanged)"
-                        )).small().color(muted));
-                    } else {
-                        ui.label(egui::RichText::new(
-                            "Individual HTTP responses with a 7-sample rolling median. All raw samples remain unchanged."
-                        ).small().color(muted));
-                    }
-                }
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Engine elapsed: {:.3}s", self.elapsed_seconds)).small().color(muted));
-                    ui.label(egui::RichText::new(format!("Retained samples: {}", self.samples.len())).small().color(muted));
-                });
-            });
+
     }
 
     fn results_ui(&mut self, ui: &mut egui::Ui) {
@@ -1942,6 +2018,7 @@ impl RedPulseApp {
 impl eframe::App for RedPulseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_engine();
+        self.refresh_chart_cache(self.running.is_none());
         self.recon.poll();
         if let Some((target, result)) = self.recon.take_completed_result() {
             self.record_protection_result(target, result);
@@ -2190,6 +2267,13 @@ mod chart_downsampling_tests {
         assert!(values.contains(&900.0));
         assert!(values.contains(&1.0));
         assert!(reduced.len() <= 2_000);
+    }
+
+    #[test]
+    fn chart_downsampling_orders_out_of_order_completion_samples() {
+        let points = VecDeque::from([(2.0, 20.0), (0.0, 10.0), (1.0, 15.0)]);
+        let reduced = downsample_min_max(&points, 2_000);
+        assert_eq!(reduced, vec![[0.0, 10.0], [1.0, 15.0], [2.0, 20.0]]);
     }
 
     #[test]

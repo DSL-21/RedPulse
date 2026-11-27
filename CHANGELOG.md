@@ -2,6 +2,18 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.6.6] - 2026-11-27
+
+### Improved
+- Reduced the Target Endpoint field maximum width from 560 px to 320 px to keep it proportionate to other form controls.
+- Cached chart point preparation and refresh the response-latency series at most 10 times per second instead of rebuilding it on every 50 ms UI repaint.
+- Refresh CPU plot data only when hardware telemetry samples change, and reuse rolling-median scratch storage rather than allocating once per plotted point.
+- Skip sorting already chronological response samples and use percentile selection instead of sorting the full latency set.
+- Moved the response-latency panel directly below generator telemetry and above route/backend breakdowns.
+
+### Notes
+- No changes to HTTP request generation, scheduling, profiles, raw measurements, or report exports.
+
 ## [0.6.5] - 2026-11-27
 
 ### Fixed
