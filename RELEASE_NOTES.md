@@ -1,18 +1,16 @@
-# RedPulse 0.6.2
+# RedPulse 0.6.3
 
-RedPulse 0.6.2 focuses on a clearer Traffic Lab interface and more reliable test completion.
+RedPulse 0.6.3 is a visual refinement of the existing desktop application. It does not add new testing modes or user-facing features.
 
-## User interface
-- Reorganized the Traffic Lab into distinct configuration, live measurement, request accounting, telemetry, routing and latency sections.
-- Improved visual hierarchy, spacing, labels and metric grouping for easier scanning.
-- Made all test configuration controls read-only while a run is active, so the displayed setup cannot drift away from the configuration already running in the engine.
-- Clarified sample-retention behavior and the meaning of destination-IP and backend measurements.
+## Interface refinement
+- Reworked the Traffic Lab into a quieter, more consistent desktop layout with a compact configuration surface.
+- Removed repeated large metric cards and grouped the live dashboard around a single response-latency chart and generator-health panel.
+- Simplified navigation and reduced decorative labels, nested containers and duplicated status text.
+- Clarified core performance KPIs, HTTP status counters and retained sample behavior.
+- Kept all existing test profiles, settings, metrics, routing views and reporting behavior.
 
-## Engine reliability
-- Stop auxiliary statistics and hardware-monitor tasks as soon as the workload has finished, including when the configured request budget is reached before the duration deadline.
-- Preserve the distinction between a run that completed its configured budget and a run explicitly stopped by the user.
-- Add a regression test for early request-budget completion.
-- Preserve latency histogram samples above 60 seconds and test long-duration percentile recording.
-- Keep bounded queues, response-body measurement limits and volatile session retention as stability safeguards.
+## Compatibility
+- No changes to the HTTP workload model or request scheduling behavior.
+- The existing bounded queues and memory safeguards remain unchanged.
 
 Use RedPulse only against systems you own or are explicitly authorized to test.

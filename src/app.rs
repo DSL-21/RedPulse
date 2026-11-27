@@ -736,36 +736,38 @@ impl RedPulseApp {
     }
 
     fn metric_card(ui: &mut egui::Ui, label: &str, value: impl ToString, unit: &str) {
-        egui::Frame::group(ui.style())
-            .fill(egui::Color32::from_rgb(25, 34, 48))
+        let muted = egui::Color32::from_rgb(139, 157, 180);
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(23, 31, 44))
             .stroke(egui::Stroke::new(
                 1.0_f32,
-                egui::Color32::from_rgb(48, 65, 86),
+                egui::Color32::from_rgb(39, 54, 73),
             ))
-            .corner_radius(12)
-            .inner_margin(egui::Margin::same(12))
+            .corner_radius(10)
+            .inner_margin(egui::Margin::same(11))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.set_min_height(68.0);
                 ui.label(
                     egui::RichText::new(label)
-                        .size(10.5)
+                        .size(9.5)
                         .strong()
-                        .color(egui::Color32::from_rgb(145, 163, 185)),
+                        .color(muted),
                 );
-                ui.add_space(4.0);
+                ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.heading(
-                        egui::RichText::new(value.to_string())
-                            .size(24.0)
-                            .strong()
-                            .color(egui::Color32::from_rgb(232, 241, 251)),
-                    );
                     ui.label(
-                        egui::RichText::new(unit)
-                            .small()
-                            .color(egui::Color32::from_rgb(145, 163, 185)),
+                        egui::RichText::new(value.to_string())
+                            .size(22.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(236, 243, 251)),
                     );
+                    if !unit.is_empty() {
+                        ui.label(
+                            egui::RichText::new(unit)
+                                .size(10.0)
+                                .color(muted),
+                        );
+                    }
                 });
             });
     }
@@ -825,220 +827,183 @@ impl RedPulseApp {
     }
 
     fn tester_ui(&mut self, ui: &mut egui::Ui) {
-        let muted = egui::Color32::from_rgb(139, 157, 180);
+        let muted = egui::Color32::from_rgb(137, 155, 178);
         let accent = egui::Color32::from_rgb(91, 183, 238);
-        let card_fill = egui::Color32::from_rgb(22, 30, 43);
-        let card_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(43, 59, 79));
+        let panel_fill = egui::Color32::from_rgb(20, 28, 40);
+        let panel_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(39, 54, 73));
+        let idle = self.running.is_none();
+        let is_arrival_rate = self.load_model == LoadModel::ConstantArrivalRate;
 
-        ui.add_space(5.0);
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.heading(
                     egui::RichText::new("Traffic Lab")
                         .size(25.0)
                         .strong()
-                        .color(egui::Color32::from_rgb(238, 244, 252)),
+                        .color(egui::Color32::from_rgb(239, 245, 252)),
                 );
                 ui.label(
-                    egui::RichText::new(
-                        "Configure a controlled HTTP run and inspect the results as they happen.",
-                    )
-                    .color(muted),
+                    egui::RichText::new("HTTP load testing and live performance analysis")
+                        .size(12.0)
+                        .color(muted),
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (status_color, status_text) = if self.running.is_some() {
+                    (accent, "RUNNING")
+                } else {
+                    match self.status.as_str() {
+                        "Completed" => (egui::Color32::from_rgb(91, 197, 145), "COMPLETED"),
+                        "Stopped" => (egui::Color32::from_rgb(230, 179, 91), "STOPPED"),
+                        "Failed" => (egui::Color32::from_rgb(235, 112, 120), "FAILED"),
+                        "Starting" => (accent, "STARTING"),
+                        _ => (muted, "READY"),
+                    }
+                };
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(29, 43, 59))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        egui::Color32::from_rgb(54, 78, 102),
-                    ))
-                    .corner_radius(egui::CornerRadius::same(18))
-                    .inner_margin(egui::Margin::symmetric(11, 6))
+                    .fill(egui::Color32::from_rgb(28, 40, 55))
+                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(47, 66, 88)))
+                    .corner_radius(16)
+                    .inner_margin(egui::Margin::symmetric(12, 7))
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{}  ·  {}",
-                                self.status.to_uppercase(),
-                                env!("CARGO_PKG_VERSION")
-                            ))
-                            .size(10.5)
-                            .strong()
-                            .color(accent),
+                            egui::RichText::new(status_text)
+                                .size(10.0)
+                                .strong()
+                                .color(status_color),
                         );
                     });
             });
         });
 
-        ui.add_space(14.0);
-        egui::Frame::group(ui.style())
-            .fill(card_fill)
-            .stroke(card_stroke)
-            .corner_radius(14)
-            .inner_margin(egui::Margin::same(15))
+        ui.add_space(13.0);
+        egui::Frame::new()
+            .fill(panel_fill)
+            .stroke(panel_stroke)
+            .corner_radius(12)
+            .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("TEST CONFIGURATION")
-                            .size(11.0)
+                        egui::RichText::new("CONFIGURATION")
+                            .size(10.0)
                             .strong()
-                            .color(egui::Color32::from_rgb(158, 180, 205)),
+                            .color(egui::Color32::from_rgb(159, 180, 204)),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new(if self.running.is_some() { "CONFIGURATION LOCKED WHILE RUNNING" } else { "READY TO CONFIGURE" })
-                                .size(9.5)
+                            egui::RichText::new(if idle { "EDIT BEFORE START" } else { "LOCKED DURING RUN" })
+                                .size(9.0)
                                 .color(muted),
                         );
                     });
                 });
 
-                ui.add_space(9.0);
-                ui.label(
-                    egui::RichText::new("Test profile")
-                        .strong()
-                        .color(egui::Color32::from_rgb(216, 227, 240)),
-                );
-                ui.add_enabled_ui(self.running.is_none(), |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        let mut selected_profile = self.profile;
-                        let mut changed = false;
-                        if ui
-                            .selectable_label(selected_profile == TestProfile::Performance, "  Performance  ")
-                            .clicked()
-                        {
-                            selected_profile = TestProfile::Performance;
-                            changed = true;
-                        }
-                        if ui
-                            .selectable_label(selected_profile == TestProfile::LoadBalancer, "  Load Balancer  ")
-                            .clicked()
-                        {
-                            selected_profile = TestProfile::LoadBalancer;
-                            changed = true;
-                        }
-                        if ui
-                            .selectable_label(selected_profile == TestProfile::Protection, "  Protection  ")
-                            .clicked()
-                        {
-                            selected_profile = TestProfile::Protection;
-                            changed = true;
-                        }
-                        if changed {
-                            self.profile = selected_profile;
-                            self.apply_profile_defaults();
-                        }
-                    });
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    let mut selected = self.profile;
+                    if ui
+                        .selectable_label(selected == TestProfile::Performance, "Performance")
+                        .clicked()
+                    {
+                        selected = TestProfile::Performance;
+                    }
+                    if ui
+                        .selectable_label(selected == TestProfile::LoadBalancer, "Load Balancer")
+                        .clicked()
+                    {
+                        selected = TestProfile::LoadBalancer;
+                    }
+                    if ui
+                        .selectable_label(selected == TestProfile::Protection, "Protection")
+                        .clicked()
+                    {
+                        selected = TestProfile::Protection;
+                    }
+                    if idle && selected != self.profile {
+                        self.profile = selected;
+                        self.apply_profile_defaults();
+                    }
                 });
                 ui.label(
                     egui::RichText::new(self.profile.description())
-                        .small()
+                        .size(11.0)
                         .color(muted),
                 );
 
-                if self.profile == TestProfile::LoadBalancer {
-                    ui.add_space(3.0);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Destination routing: {}   ·   Backend response header: {}",
-                            self.dns_strategy.label(),
-                            if self.backend_id_header.trim().is_empty() { "not configured" } else { self.backend_id_header.trim() }
-                        ))
-                        .small()
-                        .color(accent),
-                    );
-                } else if self.profile == TestProfile::Protection {
-                    ui.add_space(3.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Observes access-control responses and passive edge-service signals. It does not bypass protections.",
-                        )
-                        .small()
-                        .color(muted),
-                    );
-                }
-
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.label(
-                    egui::RichText::new("TARGET ENDPOINT")
-                        .size(10.5)
+                    egui::RichText::new("TARGET")
+                        .size(9.5)
                         .strong()
-                        .color(egui::Color32::from_rgb(158, 180, 205)),
+                        .color(egui::Color32::from_rgb(159, 180, 204)),
                 );
-                ui.add_enabled_ui(self.running.is_none(), |ui| {
+                ui.add_enabled_ui(idle, |ui| {
                     ui.add_sized(
-                        [ui.available_width(), 36.0],
+                        [ui.available_width(), 34.0],
                         egui::TextEdit::singleline(&mut self.target)
                             .hint_text("https://your-authorized-target.example")
                             .font(egui::TextStyle::Monospace),
                     );
                 });
-                ui.label(
-                    egui::RichText::new("Run tests only against infrastructure you own or have explicit permission to assess.")
-                        .small()
-                        .color(muted),
-                );
 
-                ui.add_space(12.0);
+                ui.add_space(10.0);
                 ui.label(
-                    egui::RichText::new("LOAD PARAMETERS")
-                        .size(10.5)
+                    egui::RichText::new("LOAD PROFILE")
+                        .size(9.5)
                         .strong()
-                        .color(egui::Color32::from_rgb(158, 180, 205)),
+                        .color(egui::Color32::from_rgb(159, 180, 204)),
                 );
-                ui.add_space(5.0);
+                ui.add_space(4.0);
                 ui.columns(4, |columns| {
-                    for (column, label, hint) in [
-                        (0, "Workers", "Concurrent requests"),
-                        (1, "Duration", "Seconds"),
-                        (2, "Arrival rate", "Requests / second"),
-                        (3, "Request budget", "Total scheduled requests"),
-                    ] {
-                        columns[column].vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new(label)
-                                    .strong()
-                                    .color(egui::Color32::from_rgb(220, 230, 242)),
-                            );
-                            let response = match column {
-                                0 => ui.add_enabled(
-                                    self.running.is_none(),
-                                    egui::TextEdit::singleline(&mut self.workers_input)
-                                        .desired_width(f32::INFINITY)
-                                        .font(egui::TextStyle::Monospace),
-                                ),
-                                1 => ui.add_enabled(
-                                    self.running.is_none(),
-                                    egui::TextEdit::singleline(&mut self.duration_input)
-                                        .desired_width(f32::INFINITY)
-                                        .font(egui::TextStyle::Monospace),
-                                ),
-                                2 => ui.add_enabled(
-                                    self.running.is_none() && self.load_model == LoadModel::ConstantArrivalRate,
-                                    egui::TextEdit::singleline(&mut self.rps_input)
-                                        .desired_width(f32::INFINITY)
-                                        .font(egui::TextStyle::Monospace),
-                                ),
-                                _ => ui.add_enabled(
-                                    self.running.is_none(),
-                                    egui::TextEdit::singleline(&mut self.max_requests_input)
-                                        .desired_width(f32::INFINITY)
-                                        .font(egui::TextStyle::Monospace),
-                                ),
-                            };
-                            let _ = response;
-                            ui.label(egui::RichText::new(hint).small().color(muted));
-                        });
-                    }
+                    columns[0].vertical(|ui| {
+                        ui.label(egui::RichText::new("Workers").strong());
+                        ui.add_enabled(
+                            idle,
+                            egui::TextEdit::singleline(&mut self.workers_input)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        ui.label(egui::RichText::new("Concurrent requests").size(9.5).color(muted));
+                    });
+                    columns[1].vertical(|ui| {
+                        ui.label(egui::RichText::new("Duration").strong());
+                        ui.add_enabled(
+                            idle,
+                            egui::TextEdit::singleline(&mut self.duration_input)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        ui.label(egui::RichText::new("Seconds").size(9.5).color(muted));
+                    });
+                    columns[2].vertical(|ui| {
+                        ui.label(egui::RichText::new("Arrival rate").strong());
+                        ui.add_enabled(
+                            idle && is_arrival_rate,
+                            egui::TextEdit::singleline(&mut self.rps_input)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        ui.label(egui::RichText::new("Requests / second").size(9.5).color(muted));
+                    });
+                    columns[3].vertical(|ui| {
+                        ui.label(egui::RichText::new("Request budget").strong());
+                        ui.add_enabled(
+                            idle,
+                            egui::TextEdit::singleline(&mut self.max_requests_input)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        ui.label(egui::RichText::new("Total scheduled").size(9.5).color(muted));
+                    });
                 });
 
-                ui.add_space(9.0);
-                egui::CollapsingHeader::new("Advanced request settings")
+                ui.add_space(7.0);
+                egui::CollapsingHeader::new("Advanced settings")
                     .default_open(false)
                     .show(ui, |ui| {
-                        ui.add_enabled_ui(self.running.is_none(), |ui| {
+                        ui.add_enabled_ui(idle, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 ui.vertical(|ui| {
                                     ui.label(egui::RichText::new("Load model").strong());
@@ -1054,7 +1019,7 @@ impl RedPulseApp {
                                     ui.label(egui::RichText::new("HTTP method").strong());
                                     egui::ComboBox::from_id_salt("method")
                                         .selected_text(&self.method)
-                                        .width(110.0)
+                                        .width(100.0)
                                         .show_ui(ui, |ui| {
                                             ui.selectable_value(&mut self.method, "GET".into(), "GET");
                                             ui.selectable_value(&mut self.method, "POST".into(), "POST");
@@ -1064,18 +1029,17 @@ impl RedPulseApp {
                                     ui.label(egui::RichText::new("Timeout (seconds)").strong());
                                     ui.add(
                                         egui::TextEdit::singleline(&mut self.timeout_input)
-                                            .desired_width(100.0)
+                                            .desired_width(92.0)
                                             .font(egui::TextStyle::Monospace),
                                     );
                                 });
                             });
                             ui.label(
                                 egui::RichText::new(self.load_model.description())
-                                    .small()
+                                    .size(10.0)
                                     .color(muted),
                             );
-
-                            ui.add_space(8.0);
+                            ui.add_space(6.0);
                             ui.horizontal_wrapped(|ui| {
                                 ui.vertical(|ui| {
                                     ui.label(egui::RichText::new("DNS routing").strong());
@@ -1088,43 +1052,27 @@ impl RedPulseApp {
                                         });
                                 });
                                 ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new("Backend ID response header").strong());
+                                    ui.label(egui::RichText::new("Backend ID header").strong());
                                     ui.add(
                                         egui::TextEdit::singleline(&mut self.backend_id_header)
                                             .hint_text("x-backend-id")
-                                            .desired_width(220.0),
+                                            .desired_width(200.0),
                                     );
                                 });
                             });
                             ui.label(
                                 egui::RichText::new(self.dns_strategy.description())
-                                    .small()
+                                    .size(10.0)
                                     .color(muted),
                             );
-                            ui.label(
-                                egui::RichText::new(
-                                    "A backend identifier is counted only when your application returns the configured response header.",
-                                )
-                                .small()
-                                .color(muted),
-                            );
-
                             if self.method == "POST" {
-                                ui.add_space(8.0);
+                                ui.add_space(7.0);
                                 ui.label(egui::RichText::new("JSON request body").strong());
                                 ui.add(
                                     egui::TextEdit::multiline(&mut self.body)
                                         .desired_rows(4)
                                         .desired_width(f32::INFINITY)
                                         .font(egui::TextStyle::Monospace),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "POST body measurement limit: {} KiB.",
-                                        MAX_REQUEST_BODY_BYTES / 1024
-                                    ))
-                                    .small()
-                                    .color(muted),
                                 );
                             }
                         });
@@ -1134,15 +1082,12 @@ impl RedPulseApp {
                 ui.separator();
                 ui.add_space(9.0);
                 ui.horizontal_wrapped(|ui| {
-                    let can_start = self.running.is_none() && !self.target.trim().is_empty();
                     if ui
                         .add_enabled(
-                            can_start,
-                            egui::Button::new(
-                                egui::RichText::new("▶  Start test").strong(),
-                            )
-                            .min_size(egui::vec2(142.0, 36.0))
-                            .fill(egui::Color32::from_rgb(29, 137, 96)),
+                            idle && !self.target.trim().is_empty(),
+                            egui::Button::new(egui::RichText::new("Start test").strong())
+                                .min_size(egui::vec2(130.0, 35.0))
+                                .fill(egui::Color32::from_rgb(30, 132, 94)),
                         )
                         .clicked()
                     {
@@ -1150,373 +1095,351 @@ impl RedPulseApp {
                     }
                     if ui
                         .add_enabled(
-                            self.running.is_some(),
-                            egui::Button::new(
-                                egui::RichText::new("■  Stop run").strong(),
-                            )
-                            .min_size(egui::vec2(120.0, 36.0))
-                            .fill(egui::Color32::from_rgb(151, 62, 70)),
+                            !idle,
+                            egui::Button::new(egui::RichText::new("Stop run").strong())
+                                .min_size(egui::vec2(105.0, 35.0))
+                                .fill(egui::Color32::from_rgb(145, 61, 70)),
                         )
                         .clicked()
                     {
                         self.stop_test();
                     }
                     if ui
-                        .add_enabled(
-                            self.running.is_none(),
-                            egui::Button::new("Clear live results")
-                                .min_size(egui::vec2(132.0, 36.0)),
-                        )
+                        .add_enabled(idle, egui::Button::new("Clear live results"))
                         .clicked()
                     {
                         self.reset_results();
                         self.error = None;
                     }
-                    ui.label(
-                        egui::RichText::new(&self.status)
-                            .strong()
-                            .color(if self.running.is_some() {
-                                egui::Color32::from_rgb(91, 183, 238)
-                            } else if self.status == "Failed" {
-                                egui::Color32::LIGHT_RED
-                            } else if self.status == "Completed" {
-                                egui::Color32::from_rgb(92, 202, 151)
-                            } else {
-                                muted
-                            }),
-                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(if idle { "Ready to run" } else { "Configuration locked" })
+                                .size(10.0)
+                                .color(muted),
+                        );
+                    });
                 });
             });
 
         if let Some(error) = &self.error {
-            ui.add_space(8.0);
+            ui.add_space(7.0);
             egui::Frame::new()
-                .fill(egui::Color32::from_rgb(54, 29, 35))
-                .stroke(egui::Stroke::new(
-                    1.0_f32,
-                    egui::Color32::from_rgb(133, 65, 76),
-                ))
-                .corner_radius(10)
-                .inner_margin(egui::Margin::same(10))
+                .fill(egui::Color32::from_rgb(48, 28, 35))
+                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(125, 61, 73)))
+                .corner_radius(9)
+                .inner_margin(egui::Margin::same(9))
                 .show(ui, |ui| {
-                    ui.colored_label(egui::Color32::from_rgb(255, 163, 169), error);
+                    ui.colored_label(egui::Color32::from_rgb(255, 167, 174), error);
                 });
         }
 
-        ui.add_space(18.0);
+        ui.add_space(17.0);
         ui.horizontal(|ui| {
             ui.heading(
-                egui::RichText::new("Live measurements")
+                egui::RichText::new("Live performance")
                     .size(20.0)
                     .strong()
-                    .color(egui::Color32::from_rgb(235, 242, 250)),
+                    .color(egui::Color32::from_rgb(239, 245, 252)),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(format!("{:.2}s elapsed", self.elapsed_seconds))
-                        .small()
+                    egui::RichText::new(format!("{:.1}s elapsed", self.elapsed_seconds))
+                        .size(10.5)
                         .color(muted),
                 );
             });
         });
-        ui.label(
-            egui::RichText::new("Aggregate counters cover the complete run; the on-screen sample table retains the most recent 10,000 responses.")
-                .small()
-                .color(muted),
-        );
-        ui.add_space(8.0);
+        ui.add_space(7.0);
 
+        let (average, minimum, p50, p95, p99, maximum) = self.metrics();
+        let success_rate = if self.total_received == 0 {
+            0.0
+        } else {
+            self.total_success as f64 * 100.0 / self.total_received as f64
+        };
         ui.columns(4, |columns| {
-            Self::metric_card(
-                &mut columns[0],
-                "COMPLETED REQUESTS",
-                self.total_received,
-                "",
-            );
-            Self::metric_card(
-                &mut columns[1],
-                "OBSERVED THROUGHPUT",
-                format!("{:.2}", self.observed_rps()),
-                "RPS",
-            );
-            Self::metric_card(&mut columns[2], "HTTP 2XX", self.total_success, "");
-            Self::metric_card(
-                &mut columns[3],
-                "NETWORK ERRORS",
-                self.total_network_errors,
-                "",
-            );
-        });
-        ui.add_space(8.0);
-        ui.columns(4, |columns| {
-            Self::metric_card(&mut columns[0], "HTTP 3XX", self.total_redirects, "");
-            Self::metric_card(&mut columns[1], "HTTP 4XX", self.total_http_4xx, "");
-            Self::metric_card(&mut columns[2], "HTTP 5XX", self.total_http_5xx, "");
-            let (avg, min, p50, p95, p99, max) = self.metrics();
-            Self::metric_card(
-                &mut columns[3],
-                "AVERAGE LATENCY",
-                format!("{avg:.1}"),
-                "ms",
-            );
-            let _ = (min, p50, p95, p99, max);
+            Self::metric_card(&mut columns[0], "REQUESTS COMPLETED", self.total_received, "");
+            Self::metric_card(&mut columns[1], "THROUGHPUT", format!("{:.2}", self.observed_rps()), "req/s");
+            Self::metric_card(&mut columns[2], "P95 LATENCY", format!("{p95:.1}"), "ms");
+            Self::metric_card(&mut columns[3], "HTTP 2XX RATE", format!("{success_rate:.1}"), "%");
         });
 
-        let (_, min, p50, p95, p99, max) = self.metrics();
-        ui.label(
-            egui::RichText::new(format!(
-                "HTTP latency: min {min:.1} ms   ·   P50 {p50:.1} ms   ·   P95 {p95:.1} ms   ·   P99 {p99:.1} ms   ·   max {max:.1} ms"
-            ))
-            .small()
-            .color(muted),
-        );
-        ui.label(
-            egui::RichText::new("HTTP latency includes 2xx–5xx responses and excludes transport failures and timeouts.")
-                .small()
-                .color(muted),
-        );
+        ui.add_space(7.0);
+        ui.horizontal_wrapped(|ui| {
+            for (label, value, color) in [
+                ("2xx", self.total_success, egui::Color32::from_rgb(92, 196, 145)),
+                ("3xx", self.total_redirects, egui::Color32::from_rgb(113, 174, 230)),
+                ("4xx", self.total_http_4xx, egui::Color32::from_rgb(229, 183, 92)),
+                ("5xx", self.total_http_5xx, egui::Color32::from_rgb(231, 119, 126)),
+                ("Network errors", self.total_network_errors, muted),
+            ] {
+                ui.label(
+                    egui::RichText::new(format!("{label}  {value}"))
+                        .size(10.5)
+                        .strong()
+                        .color(color),
+                );
+                ui.add_space(10.0);
+            }
+        });
 
-        if self.profile == TestProfile::Protection {
-            ui.add_space(10.0);
-            egui::Frame::group(ui.style())
-                .fill(card_fill)
-                .stroke(card_stroke)
+        ui.add_space(10.0);
+        ui.columns(2, |columns| {
+            egui::Frame::new()
+                .fill(panel_fill)
+                .stroke(panel_stroke)
                 .corner_radius(12)
                 .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.label(egui::RichText::new("PROTECTION RESPONSES").strong().color(egui::Color32::from_rgb(158, 180, 205)));
-                    ui.add_space(5.0);
-                    ui.columns(4, |columns| {
-                        Self::metric_card(&mut columns[0], "401 UNAUTHORIZED", self.total_unauthorized, "");
-                        Self::metric_card(&mut columns[1], "403 FORBIDDEN", self.total_forbidden, "");
-                        Self::metric_card(&mut columns[2], "429 RATE LIMITED", self.total_rate_limited, "");
-                        Self::metric_card(&mut columns[3], "503 UNAVAILABLE", self.total_unavailable, "");
+                .show(&mut columns[0], |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("RESPONSE LATENCY").strong().size(10.0).color(egui::Color32::from_rgb(159, 180, 204)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new(format!("{} retained", self.recent_latencies.len())).size(9.5).color(muted));
+                        });
                     });
-                    ui.label(egui::RichText::new("These are observed HTTP statuses, not proof of a particular WAF rule or protection action.")
-                        .small().color(muted));
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "P50 {p50:.1} ms     P95 {p95:.1} ms     P99 {p99:.1} ms"
+                        ))
+                        .size(11.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(223, 234, 246)),
+                    );
+                    if self.recent_latencies.is_empty() {
+                        ui.add_space(22.0);
+                        ui.label(egui::RichText::new("Waiting for HTTP responses").color(muted));
+                        ui.add_space(22.0);
+                    } else {
+                        let points: PlotPoints = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
+                        Plot::new("latency_plot")
+                            .height(205.0)
+                            .show_x(true)
+                            .show_y(true)
+                            .allow_zoom(false)
+                            .allow_scroll(false)
+                            .allow_drag(false)
+                            .allow_boxed_zoom(false)
+                            .allow_double_click_reset(false)
+                            .x_axis_label("Elapsed (s)")
+                            .y_axis_label("Latency (ms)")
+                            .include_x(0.0)
+                            .include_y(0.0)
+                            .show(ui, |plot_ui| {
+                                plot_ui.line(
+                                    Line::new("Response latency", points)
+                                        .color(egui::Color32::from_rgb(83, 183, 246))
+                                        .width(2.0_f32),
+                                );
+                            });
+                    }
+                    ui.label(
+                        egui::RichText::new("Percentiles include HTTP responses and exclude transport failures.")
+                            .size(9.5)
+                            .color(muted),
+                    );
+                });
+
+            egui::Frame::new()
+                .fill(panel_fill)
+                .stroke(panel_stroke)
+                .corner_radius(12)
+                .inner_margin(egui::Margin::same(12))
+                .show(&mut columns[1], |ui| {
+                    ui.label(egui::RichText::new("GENERATOR HEALTH").strong().size(10.0).color(egui::Color32::from_rgb(159, 180, 204)));
+                    if let Some(hardware) = self.hardware_samples.back() {
+                        let process_memory_mb = hardware.process_memory_bytes
+                            .map(|bytes| bytes as f64 / 1_048_576.0);
+                        let process_cpu_capacity = normalized_process_cpu_percent(
+                            hardware.process_cpu_percent,
+                            hardware.logical_cores,
+                        );
+                        ui.add_space(7.0);
+                        ui.columns(2, |metrics| {
+                            Self::metric_card(&mut metrics[0], "HOST CPU", format!("{:.1}", hardware.system_cpu_percent), "%");
+                            Self::metric_card(&mut metrics[1], "REDPULSE CPU", format!("{process_cpu_capacity:.1}"), "%");
+                        });
+                        ui.add_space(6.0);
+                        ui.columns(2, |metrics| {
+                            Self::metric_card(
+                                &mut metrics[0],
+                                "PROCESS MEMORY",
+                                process_memory_mb.map(|value| format!("{value:.1}")).unwrap_or_else(|| "—".into()),
+                                "MB",
+                            );
+                            Self::metric_card(
+                                &mut metrics[1],
+                                "HOST RAM",
+                                format!("{:.1}", if hardware.system_memory_total_bytes == 0 { 0.0 } else {
+                                    hardware.system_memory_used_bytes as f64 / hardware.system_memory_total_bytes as f64 * 100.0
+                                }),
+                                "% used",
+                            );
+                        });
+                        ui.add_space(7.0);
+                        let cpu_points: PlotPoints = self.hardware_samples.iter().map(|sample| {
+                            [
+                                sample.elapsed_ms as f64 / 1000.0,
+                                normalized_process_cpu_percent(sample.process_cpu_percent, sample.logical_cores) as f64,
+                            ]
+                        }).collect();
+                        Plot::new("hardware_cpu_plot")
+                            .height(116.0)
+                            .show_x(false)
+                            .show_y(true)
+                            .allow_zoom(false)
+                            .allow_scroll(false)
+                            .allow_drag(false)
+                            .allow_boxed_zoom(false)
+                            .allow_double_click_reset(false)
+                            .y_axis_label("CPU (%)")
+                            .include_y(0.0)
+                            .show(ui, |plot_ui| {
+                                plot_ui.line(
+                                    Line::new("RedPulse CPU", cpu_points)
+                                        .color(egui::Color32::from_rgb(91, 183, 238))
+                                        .width(2.0_f32),
+                                );
+                            });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(egui::RichText::new(format!(
+                                "Network RX  {:.2} MB/s",
+                                hardware.network_rx_bytes_per_sec as f64 / 1_048_576.0
+                            )).size(9.5).color(muted));
+                            ui.label(egui::RichText::new(format!(
+                                "Network TX  {:.2} MB/s",
+                                hardware.network_tx_bytes_per_sec as f64 / 1_048_576.0
+                            )).size(9.5).color(muted));
+                        });
+                        if hardware.system_cpu_percent >= 95.0 || process_cpu_capacity >= 85.0 {
+                            ui.add_space(5.0);
+                            ui.colored_label(
+                                egui::Color32::from_rgb(238, 178, 82),
+                                "Low CPU headroom: generator saturation may affect this result.",
+                            );
+                        }
+                    } else {
+                        ui.add_space(28.0);
+                        ui.label(egui::RichText::new("Hardware measurements appear after the first telemetry sample.").color(muted));
+                        ui.add_space(28.0);
+                    }
+                });
+        });
+
+        if self.profile == TestProfile::Protection {
+            ui.add_space(9.0);
+            egui::Frame::new()
+                .fill(panel_fill)
+                .stroke(panel_stroke)
+                .corner_radius(10)
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("PROTECTION RESPONSES").strong().size(10.0).color(egui::Color32::from_rgb(159, 180, 204)));
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, value) in [
+                            ("401 Unauthorized", self.total_unauthorized),
+                            ("403 Forbidden", self.total_forbidden),
+                            ("429 Rate limited", self.total_rate_limited),
+                            ("503 Unavailable", self.total_unavailable),
+                        ] {
+                            ui.label(format!("{label}: {value}"));
+                            ui.add_space(12.0);
+                        }
+                    });
+                    ui.label(egui::RichText::new("Observed status codes are signals, not proof of a specific WAF action.").size(9.5).color(muted));
                 });
         }
 
-        ui.add_space(10.0);
-        egui::Frame::group(ui.style())
-            .fill(card_fill)
-            .stroke(card_stroke)
-            .corner_radius(12)
-            .inner_margin(egui::Margin::same(12))
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("REQUEST ACCOUNTING")
-                        .strong()
-                        .color(egui::Color32::from_rgb(158, 180, 205)),
-                );
-                ui.add_space(5.0);
-                ui.horizontal_wrapped(|ui| {
-                    for (label, value) in [
-                        ("Scheduled", self.engine_stats.scheduled),
-                        ("Started", self.engine_stats.started),
-                        ("Completed", self.engine_stats.completed),
-                        ("Queued", self.engine_stats.queued),
-                        ("In flight", self.engine_stats.in_flight),
-                        ("Cancelled", self.engine_stats.cancelled),
-                        ("Dropped", self.engine_stats.dropped),
-                    ] {
-                        ui.label(
-                            egui::RichText::new(format!("{label}: {value}"))
-                                .color(egui::Color32::from_rgb(218, 230, 243)),
-                        );
-                        ui.add_space(7.0);
-                    }
-                });
-                if self.engine_stats.limit_reached {
+        if self.dns_strategy == DnsStrategy::RoundRobin
+            || !self.backend_metrics.is_empty()
+            || self.engine_stats.scheduled > 0
+        {
+            ui.add_space(9.0);
+            egui::Frame::new()
+                .fill(panel_fill)
+                .stroke(panel_stroke)
+                .corner_radius(10)
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("ROUTING & REQUEST ACCOUNTING").strong().size(10.0).color(egui::Color32::from_rgb(159, 180, 204)));
                     ui.add_space(4.0);
-                    ui.colored_label(
-                        egui::Color32::from_rgb(238, 178, 82),
-                        format!(
-                            "Configured request budget of {} reached.",
-                            self.max_requests
-                        ),
-                    );
-                }
-            });
-
-        ui.add_space(10.0);
-        egui::Frame::group(ui.style())
-            .fill(card_fill)
-            .stroke(card_stroke)
-            .corner_radius(12)
-            .inner_margin(egui::Margin::same(12))
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("GENERATOR & HOST TELEMETRY").strong().color(egui::Color32::from_rgb(158, 180, 205)));
-                if let Some(hardware) = self.hardware_samples.back() {
-                    let process_memory_mb = hardware.process_memory_bytes.map(|bytes| bytes as f64 / 1_048_576.0);
-                    let process_cpu_capacity = normalized_process_cpu_percent(hardware.process_cpu_percent, hardware.logical_cores);
-                    ui.add_space(6.0);
-                    ui.columns(3, |columns| {
-                        Self::metric_card(&mut columns[0], "HOST CPU", format!("{:.1}", hardware.system_cpu_percent), "%");
-                        Self::metric_card(&mut columns[1], "REDPULSE CPU", format!("{process_cpu_capacity:.1}"), "% of total PC capacity");
-                        Self::metric_card(&mut columns[2], "PROCESS RAM", process_memory_mb.map(|value| format!("{value:.1}")).unwrap_or_else(|| "N/A".into()), "MB");
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, value) in [
+                            ("Scheduled", self.engine_stats.scheduled),
+                            ("Started", self.engine_stats.started),
+                            ("Completed", self.engine_stats.completed),
+                            ("Queued", self.engine_stats.queued),
+                            ("In flight", self.engine_stats.in_flight),
+                            ("Cancelled", self.engine_stats.cancelled),
+                            ("Dropped", self.engine_stats.dropped),
+                        ] {
+                            ui.label(egui::RichText::new(format!("{label} {value}")).size(9.5).color(egui::Color32::from_rgb(215, 226, 239)));
+                            ui.add_space(8.0);
+                        }
                     });
-                    ui.add_space(7.0);
-                    ui.columns(2, |columns| {
-                        Self::metric_card(&mut columns[0], "HOST NETWORK RX", format!("{:.2}", hardware.network_rx_bytes_per_sec as f64 / 1_048_576.0), "MB/s");
-                        Self::metric_card(&mut columns[1], "HOST NETWORK TX", format!("{:.2}", hardware.network_tx_bytes_per_sec as f64 / 1_048_576.0), "MB/s");
-                    });
-                    let host_memory_percent = if hardware.system_memory_total_bytes == 0 {
-                        0.0
-                    } else {
-                        hardware.system_memory_used_bytes as f64 / hardware.system_memory_total_bytes as f64 * 100.0
-                    };
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} logical cores   ·   Host RAM {:.1}% used   ·   Network throughput is host-wide, not process-only.",
-                            hardware.logical_cores, host_memory_percent
-                        ))
-                        .small()
-                        .color(muted),
-                    );
-                    if hardware.system_cpu_percent >= 95.0 || process_cpu_capacity >= 85.0 {
-                        ui.add_space(4.0);
+                    if self.engine_stats.limit_reached {
                         ui.colored_label(
                             egui::Color32::from_rgb(238, 178, 82),
-                            "Low CPU headroom: the generator or host may be limiting this run. Interpret target results with caution.",
+                            format!("Configured request budget reached: {}", self.max_requests),
                         );
                     }
-                    let cpu_points: PlotPoints = self.hardware_samples.iter().map(|sample| {
-                        [
-                            sample.elapsed_ms as f64 / 1000.0,
-                            normalized_process_cpu_percent(sample.process_cpu_percent, sample.logical_cores) as f64,
-                        ]
-                    }).collect();
-                    Plot::new("hardware_cpu_plot")
-                        .show_x(false)
-                        .show_y(false)
-                        .cursor_color(egui::Color32::TRANSPARENT)
-                        .height(125.0)
-                        .allow_zoom(false)
-                        .allow_scroll(false)
-                        .allow_drag(false)
-                        .allow_boxed_zoom(false)
-                        .allow_double_click_reset(false)
-                        .x_axis_label("Test time (s)")
-                        .y_axis_label("RedPulse CPU (% of PC)")
-                        .include_y(0.0)
-                        .show(ui, |plot_ui| {
-                            plot_ui.line(Line::new("RedPulse CPU", cpu_points)
-                                .color(egui::Color32::from_rgb(83, 183, 246))
-                                .width(2.0_f32));
-                        });
-                } else {
-                    ui.label(egui::RichText::new("CPU, memory and network telemetry appears after the first half-second sample.")
-                        .small().color(muted));
-                }
-            });
-
-        if self.dns_strategy == DnsStrategy::RoundRobin {
-            ui.add_space(10.0);
-            egui::Frame::group(ui.style())
-                .fill(card_fill)
-                .stroke(card_stroke)
-                .corner_radius(12)
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.label(egui::RichText::new("DESTINATION IP DISTRIBUTION").strong().color(egui::Color32::from_rgb(158, 180, 205)));
-                    if self.resolved_addresses.is_empty() {
-                        ui.label(egui::RichText::new("Resolving target addresses…").small().color(muted));
-                    } else {
+                    if self.dns_strategy == DnsStrategy::RoundRobin && !self.resolved_addresses.is_empty() {
+                        ui.add_space(6.0);
+                        ui.strong("Destination IP distribution");
                         let total: u64 = self.origin_metrics.values().map(|metric| metric.requests).sum();
                         for address in &self.resolved_addresses {
                             let metric = self.origin_metrics.get(address).cloned().unwrap_or_default();
                             let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
-                            let average = metric.average_latency_ms().map(|value| format!("{value:.1} ms")).unwrap_or_else(|| "—".into());
-                            ui.label(format!("{address}   ·   {} requests ({share:.1}%)   ·   average {average}   ·   {} errors", metric.requests, metric.errors));
-                        }
-                        ui.label(egui::RichText::new("These are destination IPs selected by RedPulse. CDN anycast addresses do not necessarily represent separate origin servers.")
-                            .small().color(muted));
-                        if self.resolved_addresses.len() <= 1 {
-                            ui.colored_label(egui::Color32::from_rgb(238, 178, 82), "Only one destination IP was resolved; this run cannot compare multi-IP distribution.");
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(address).monospace().size(9.5).color(egui::Color32::from_rgb(216, 228, 241)));
+                                ui.add(
+                                    egui::ProgressBar::new((share / 100.0) as f32)
+                                        .desired_width(ui.available_width())
+                                        .text(format!("{share:.1}%  ·  {} requests", metric.requests)),
+                                );
+                            });
                         }
                     }
+                    if !self.backend_metrics.is_empty() {
+                        ui.add_space(6.0);
+                        ui.strong("Backend distribution");
+                        let total: u64 = self.backend_metrics.values().map(|metric| metric.requests).sum();
+                        for (backend, metric) in &self.backend_metrics {
+                            let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(backend).monospace().size(9.5).color(egui::Color32::from_rgb(216, 228, 241)));
+                                ui.add(
+                                    egui::ProgressBar::new((share / 100.0) as f32)
+                                        .desired_width(ui.available_width())
+                                        .text(format!("{share:.1}%  ·  {} requests  ·  {} errors", metric.requests, metric.errors)),
+                                );
+                            });
+                        }
+                    } else if self.profile == TestProfile::LoadBalancer && self.total_received > 0 {
+                        ui.label(egui::RichText::new("No backend ID was returned. Per-backend distribution requires a stable response header such as X-Backend-ID.")
+                            .size(9.5).color(muted));
+                    }
+                    ui.label(egui::RichText::new("Destination IPs are addresses selected by DNS routing; they do not necessarily represent distinct origin servers.")
+                        .size(9.0).color(muted));
                 });
         }
 
-        if !self.backend_metrics.is_empty() {
-            ui.add_space(10.0);
-            egui::Frame::group(ui.style())
-                .fill(card_fill)
-                .stroke(card_stroke)
-                .corner_radius(12)
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.label(egui::RichText::new("BACKEND DISTRIBUTION").strong().color(egui::Color32::from_rgb(158, 180, 205)));
-                    let total: u64 = self.backend_metrics.values().map(|metric| metric.requests).sum();
-                    for (backend, metric) in &self.backend_metrics {
-                        let share = if total == 0 { 0.0 } else { metric.requests as f64 * 100.0 / total as f64 };
-                        let average = metric.average_latency_ms().map(|value| format!("{value:.1} ms")).unwrap_or_else(|| "—".into());
-                        ui.label(format!("{backend}   ·   {} requests ({share:.1}%)   ·   average {average}   ·   {} errors", metric.requests, metric.errors));
-                    }
-                    ui.label(egui::RichText::new(format!("Identified {total} of {} completed responses. Backend identity depends on a stable response header emitted by the application.", self.total_received))
-                        .small().color(muted));
-                });
-        } else if self.profile == TestProfile::LoadBalancer && self.total_received > 0 {
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("No backend ID was observed. Destination IP distribution is measured, but private backend distribution cannot be confirmed without a response header such as X-Backend-ID.")
-                .small().color(muted));
-        }
-
-        ui.add_space(10.0);
-        egui::Frame::group(ui.style())
-            .fill(card_fill)
-            .stroke(card_stroke)
-            .corner_radius(12)
-            .inner_margin(egui::Margin::same(12))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("RESPONSE LATENCY").strong().color(egui::Color32::from_rgb(158, 180, 205)));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("{} retained responses", self.recent_latencies.len())).small().color(muted));
-                    });
-                });
-                if self.http_response_count > 0 {
-                    ui.label(
-                        egui::RichText::new(format!("P50 {p50:.1} ms   ·   P95 {p95:.1} ms"))
-                            .strong()
-                            .color(egui::Color32::from_rgb(214, 228, 244)),
-                    );
-                } else {
-                    ui.label(egui::RichText::new("Waiting for HTTP response measurements…").small().color(muted));
-                }
-                ui.label(egui::RichText::new("Each point represents one completed HTTP response. P50 and P95 are summary values.")
-                    .small().color(muted));
-                let points: PlotPoints = downsample_min_max(&self.recent_latencies, MAX_PLOT_POINTS).into();
-                if self.recent_latencies.is_empty() {
-                    ui.add_space(7.0);
-                    ui.label(egui::RichText::new("No response samples yet.").color(muted));
-                } else {
-                    Plot::new("latency_plot")
-                        .show_x(false)
-                        .show_y(false)
-                        .cursor_color(egui::Color32::TRANSPARENT)
-                        .height(190.0)
-                        .allow_zoom(false)
-                        .allow_scroll(false)
-                        .allow_drag(false)
-                        .allow_boxed_zoom(false)
-                        .allow_double_click_reset(false)
-                        .x_axis_label("Test time (s)")
-                        .y_axis_label("Response latency (ms)")
-                        .include_x(0.0)
-                        .include_y(0.0)
-                        .show(ui, |plot_ui| {
-                            plot_ui.line(Line::new("Response latency", points)
-                                .color(egui::Color32::from_rgb(83, 183, 246))
-                                .width(2.0_f32));
-                        });
-                }
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Engine elapsed: {:.3}s", self.elapsed_seconds)).small().color(muted));
-                    ui.label(egui::RichText::new(format!("Retained samples: {}", self.samples.len())).small().color(muted));
-                });
-            });
+        ui.add_space(7.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "Aggregate results cover the full run. The on-screen sample table retains the latest {} responses; export contains the retained current-run samples.",
+                MAX_UI_SAMPLES
+            ))
+            .size(9.5)
+            .color(muted),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "HTTP latency: average {average:.1} ms   ·   min {minimum:.1} ms   ·   P50 {p50:.1} ms   ·   P95 {p95:.1} ms   ·   P99 {p99:.1} ms   ·   max {maximum:.1} ms"
+            ))
+            .size(9.5)
+            .color(muted),
+        );
     }
 
     fn results_ui(&mut self, ui: &mut egui::Ui) {
@@ -1839,40 +1762,69 @@ impl eframe::App for RedPulseApp {
             .show(ctx, |ui| self.header(ui));
         egui::SidePanel::left("navigation")
             .resizable(false)
-            .default_width(158.0)
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(15, 20, 29)))
+            .default_width(170.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(13, 18, 27))
+                    .inner_margin(egui::Margin::symmetric(12, 12)),
+            )
             .show(ctx, |ui| {
-                ui.add_space(12.0);
-                if ui
-                    .selectable_label(self.tab == Tab::Recon, "◈  Protection")
-                    .clicked()
-                {
-                    self.tab = Tab::Recon;
-                }
-                if ui
-                    .selectable_label(self.tab == Tab::Tester, "◉  Traffic Lab")
-                    .clicked()
-                {
-                    self.tab = Tab::Tester;
-                }
-                if ui
-                    .selectable_label(self.tab == Tab::Results, "▤  Results")
-                    .clicked()
-                {
-                    self.tab = Tab::Results;
-                }
-                if ui
-                    .selectable_label(self.tab == Tab::About, "ⓘ  About")
-                    .clicked()
-                {
-                    self.tab = Tab::About;
+                let muted = egui::Color32::from_rgb(119, 139, 162);
+                ui.add_space(7.0);
+                ui.label(
+                    egui::RichText::new("WORKSPACE")
+                        .size(9.5)
+                        .strong()
+                        .color(muted),
+                );
+                ui.add_space(9.0);
+                for (tab, label) in [
+                    (Tab::Tester, "Traffic Lab"),
+                    (Tab::Recon, "Protection"),
+                    (Tab::Results, "Results"),
+                    (Tab::About, "About"),
+                ] {
+                    let selected = self.tab == tab;
+                    let response = ui.add_sized(
+                        [ui.available_width(), 34.0],
+                        egui::Button::new(
+                            egui::RichText::new(label)
+                                .size(12.0)
+                                .strong()
+                                .color(if selected {
+                                    egui::Color32::from_rgb(230, 241, 251)
+                                } else {
+                                    muted
+                                }),
+                        )
+                        .fill(if selected {
+                            egui::Color32::from_rgb(29, 47, 65)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        })
+                        .stroke(if selected {
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(49, 82, 111))
+                        } else {
+                            egui::Stroke::NONE
+                        })
+                        .corner_radius(8),
+                    );
+                    if response.clicked() {
+                        self.tab = tab;
+                    }
+                    ui.add_space(3.0);
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.separator();
                     ui.label(
-                        egui::RichText::new(concat!("REDPULSE ", env!("CARGO_PKG_VERSION")))
-                            .small()
-                            .color(egui::Color32::GRAY),
+                        egui::RichText::new(concat!("VERSION ", env!("CARGO_PKG_VERSION")))
+                            .size(9.0)
+                            .color(muted),
+                    );
+                    ui.label(
+                        egui::RichText::new("RUST / TOKIO / REQWEST")
+                            .size(8.0)
+                            .color(egui::Color32::from_rgb(91, 109, 130)),
                     );
                 });
             });

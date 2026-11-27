@@ -2,6 +2,17 @@
 
 All notable RedPulse changes are documented here.
 
+## [0.6.3] - 2026-11-27
+
+### Improved
+- Reworked the Traffic Lab layout to reduce visual noise and duplicated metrics.
+- Replaced repeated dashboard cards with a compact KPI strip, a primary latency chart and a dedicated generator-health panel.
+- Simplified workspace navigation and section labels.
+- Retained all existing controls, test profiles, performance metrics, routing views and reports; no new user-facing features added.
+
+### Notes
+- No HTTP load scheduling or engine behavior changes in this release.
+
 ## [0.6.2] - 2026-11-27
 
 ### Improved
