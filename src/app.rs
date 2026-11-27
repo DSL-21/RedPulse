@@ -1273,7 +1273,6 @@ impl RedPulseApp {
             Plot::new("hardware_cpu_plot")
                 .show_x(false)
                 .show_y(false)
-                .show_crosshair(false)
                 .height(110.0)
                 .allow_zoom(false)
                 .allow_scroll(false)
@@ -1419,7 +1418,6 @@ impl RedPulseApp {
             let plot = Plot::new("latency_plot")
                 .show_x(false)
                 .show_y(false)
-                .show_crosshair(false)
                 .height(175.0)
                 // Keep the chart fixed: mouse wheel and pointer gestures must
                 // scroll the surrounding dashboard, never alter plot bounds.
