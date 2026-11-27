@@ -849,15 +849,22 @@ impl RedPulseApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(29, 43, 59))
-                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(54, 78, 102)))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgb(54, 78, 102),
+                    ))
                     .corner_radius(egui::CornerRadius::same(18))
                     .inner_margin(egui::Margin::symmetric(11, 6))
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new(format!("{}  ·  {}", self.status.to_uppercase(), env!("CARGO_PKG_VERSION")))
-                                .size(10.5)
-                                .strong()
-                                .color(accent),
+                            egui::RichText::new(format!(
+                                "{}  ·  {}",
+                                self.status.to_uppercase(),
+                                env!("CARGO_PKG_VERSION")
+                            ))
+                            .size(10.5)
+                            .strong()
+                            .color(accent),
                         );
                     });
             });
@@ -1180,7 +1187,10 @@ impl RedPulseApp {
             ui.add_space(8.0);
             egui::Frame::new()
                 .fill(egui::Color32::from_rgb(54, 29, 35))
-                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(133, 65, 76)))
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgb(133, 65, 76),
+                ))
                 .corner_radius(10)
                 .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
@@ -1212,10 +1222,25 @@ impl RedPulseApp {
         ui.add_space(8.0);
 
         ui.columns(4, |columns| {
-            Self::metric_card(&mut columns[0], "COMPLETED REQUESTS", self.total_received, "");
-            Self::metric_card(&mut columns[1], "OBSERVED THROUGHPUT", format!("{:.2}", self.observed_rps()), "RPS");
+            Self::metric_card(
+                &mut columns[0],
+                "COMPLETED REQUESTS",
+                self.total_received,
+                "",
+            );
+            Self::metric_card(
+                &mut columns[1],
+                "OBSERVED THROUGHPUT",
+                format!("{:.2}", self.observed_rps()),
+                "RPS",
+            );
             Self::metric_card(&mut columns[2], "HTTP 2XX", self.total_success, "");
-            Self::metric_card(&mut columns[3], "NETWORK ERRORS", self.total_network_errors, "");
+            Self::metric_card(
+                &mut columns[3],
+                "NETWORK ERRORS",
+                self.total_network_errors,
+                "",
+            );
         });
         ui.add_space(8.0);
         ui.columns(4, |columns| {
@@ -1223,7 +1248,12 @@ impl RedPulseApp {
             Self::metric_card(&mut columns[1], "HTTP 4XX", self.total_http_4xx, "");
             Self::metric_card(&mut columns[2], "HTTP 5XX", self.total_http_5xx, "");
             let (avg, min, p50, p95, p99, max) = self.metrics();
-            Self::metric_card(&mut columns[3], "AVERAGE LATENCY", format!("{avg:.1}"), "ms");
+            Self::metric_card(
+                &mut columns[3],
+                "AVERAGE LATENCY",
+                format!("{avg:.1}"),
+                "ms",
+            );
             let _ = (min, p50, p95, p99, max);
         });
 
@@ -1269,7 +1299,11 @@ impl RedPulseApp {
             .corner_radius(12)
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("REQUEST ACCOUNTING").strong().color(egui::Color32::from_rgb(158, 180, 205)));
+                ui.label(
+                    egui::RichText::new("REQUEST ACCOUNTING")
+                        .strong()
+                        .color(egui::Color32::from_rgb(158, 180, 205)),
+                );
                 ui.add_space(5.0);
                 ui.horizontal_wrapped(|ui| {
                     for (label, value) in [
@@ -1281,7 +1315,10 @@ impl RedPulseApp {
                         ("Cancelled", self.engine_stats.cancelled),
                         ("Dropped", self.engine_stats.dropped),
                     ] {
-                        ui.label(egui::RichText::new(format!("{label}: {value}")).color(egui::Color32::from_rgb(218, 230, 243)));
+                        ui.label(
+                            egui::RichText::new(format!("{label}: {value}"))
+                                .color(egui::Color32::from_rgb(218, 230, 243)),
+                        );
                         ui.add_space(7.0);
                     }
                 });
@@ -1289,7 +1326,10 @@ impl RedPulseApp {
                     ui.add_space(4.0);
                     ui.colored_label(
                         egui::Color32::from_rgb(238, 178, 82),
-                        format!("Configured request budget of {} reached.", self.max_requests),
+                        format!(
+                            "Configured request budget of {} reached.",
+                            self.max_requests
+                        ),
                     );
                 }
             });

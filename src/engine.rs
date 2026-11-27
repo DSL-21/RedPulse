@@ -1485,7 +1485,10 @@ mod tests {
                 | EngineEvent::Samples(_)
                 | EngineEvent::Hardware(_) => {}
                 EngineEvent::Finished { stats, stopped, .. } => {
-                    assert!(!stopped, "request-budget completion is not a user cancellation");
+                    assert!(
+                        !stopped,
+                        "request-budget completion is not a user cancellation"
+                    );
                     break stats;
                 }
                 EngineEvent::Fatal(message) => panic!("budget completion failed: {message}"),
