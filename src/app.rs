@@ -11,7 +11,7 @@ use hdrhistogram::Histogram;
 use crate::{
     engine::{
         self, DEFAULT_MAX_TOTAL_REQUESTS, DnsStrategy, EngineEvent, EngineStats, HardwareSample,
-        LoadModel, MAX_REQUEST_BODY_BYTES, Sample, TestConfig, TestHandle,
+        LoadModel, Sample, TestConfig, TestHandle,
     },
     recon::{ReconReport, ReconState},
     report,
