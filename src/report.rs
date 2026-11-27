@@ -1,9 +1,29 @@
-use std::{fs::File, io::Write, path::Path};
+use std::{
+    collections::VecDeque,
+    fs::File,
+    io::{BufWriter, Write},
+    path::Path,
+};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::engine::{DnsStrategy, EngineStats, HardwareSample, Sample};
+use crate::{
+    engine::{DnsStrategy, EngineStats, HardwareSample, Sample},
+    recon::ReconReport,
+};
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct RunSummary {
+    pub completed_http_responses: u64,
+    pub observed_rps: f64,
+    pub min_latency_ms: Option<f64>,
+    pub average_latency_ms: Option<f64>,
+    pub p50_latency_ms: Option<f64>,
+    pub p95_latency_ms: Option<f64>,
+    pub p99_latency_ms: Option<f64>,
+    pub max_latency_ms: Option<f64>,
+}
 
 #[derive(Serialize)]
 pub struct RunConfig<'a> {
@@ -21,30 +41,239 @@ pub struct RunConfig<'a> {
     pub backend_id_header: &'a str,
     pub resolved_addresses: &'a [String],
     pub stats: EngineStats,
-    pub hardware_samples: &'a [HardwareSample],
+    pub summary: RunSummary,
+    pub hardware_samples: &'a VecDeque<HardwareSample>,
 }
 
 #[derive(Serialize)]
-struct Report<'a> {
+struct TrafficRunPayload<'a> {
     application: &'static str,
     version: &'static str,
     generated_at: String,
     #[serde(flatten)]
     config: &'a RunConfig<'a>,
-    samples: &'a [Sample],
+    samples: &'a VecDeque<Sample>,
 }
 
-pub fn export_json(path: &Path, config: &RunConfig<'_>, samples: &[Sample]) -> Result<()> {
-    let report = Report {
+#[derive(Clone, Debug)]
+pub struct SessionEntry {
+    pub id: u64,
+    pub kind: String,
+    pub profile: String,
+    pub target: String,
+    pub completed_at: String,
+    payload_json: String,
+}
+
+impl SessionEntry {
+    fn memory_bytes(&self) -> usize {
+        self.payload_json.len()
+            + self.kind.len()
+            + self.profile.len()
+            + self.target.len()
+            + self.completed_at.len()
+            + std::mem::size_of::<Self>()
+    }
+
+    pub fn payload_bytes(&self) -> usize {
+        self.payload_json.len()
+    }
+}
+
+pub const MAX_SESSION_RUNS: usize = 50;
+pub const MAX_SESSION_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Default)]
+pub struct SessionHistory {
+    entries: VecDeque<SessionEntry>,
+    memory_bytes: usize,
+    evicted_runs: u64,
+}
+
+impl SessionHistory {
+    pub fn entries(&self) -> &VecDeque<SessionEntry> {
+        &self.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn memory_bytes(&self) -> usize {
+        self.memory_bytes
+    }
+
+    pub fn evicted_runs(&self) -> u64 {
+        self.evicted_runs
+    }
+
+    pub fn push(&mut self, entry: SessionEntry) -> bool {
+        let entry_bytes = entry.memory_bytes();
+        if entry_bytes > MAX_SESSION_MEMORY_BYTES {
+            self.evicted_runs = self.evicted_runs.saturating_add(1);
+            return false;
+        }
+
+        while self.entries.len() >= MAX_SESSION_RUNS
+            || self.memory_bytes.saturating_add(entry_bytes) > MAX_SESSION_MEMORY_BYTES
+        {
+            let Some(oldest) = self.entries.pop_front() else {
+                break;
+            };
+            self.memory_bytes = self.memory_bytes.saturating_sub(oldest.memory_bytes());
+            self.evicted_runs = self.evicted_runs.saturating_add(1);
+        }
+
+        self.memory_bytes = self.memory_bytes.saturating_add(entry_bytes);
+        self.entries.push_back(entry);
+        true
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.memory_bytes = 0;
+        self.evicted_runs = 0;
+    }
+}
+
+#[derive(Serialize)]
+struct SessionHeader {
+    application: &'static str,
+    version: &'static str,
+    generated_at: String,
+    storage: &'static str,
+    automatic_persistence: bool,
+    run_count: usize,
+    evicted_older_runs: u64,
+    memory_limit_bytes: usize,
+    run_limit: usize,
+}
+
+#[derive(Serialize)]
+struct SessionRunMetadata<'a> {
+    id: u64,
+    kind: &'a str,
+    profile: &'a str,
+    target: &'a str,
+    completed_at: &'a str,
+}
+
+pub fn make_traffic_session_entry(
+    id: u64,
+    config: &RunConfig<'_>,
+    samples: &VecDeque<Sample>,
+) -> Result<SessionEntry> {
+    let completed_at = chrono::Utc::now().to_rfc3339();
+    let payload = TrafficRunPayload {
         application: "RedPulse",
         version: env!("CARGO_PKG_VERSION"),
-        generated_at: chrono::Utc::now().to_rfc3339(),
+        generated_at: completed_at.clone(),
         config,
         samples,
     };
-    let mut file = File::create(path).context("Could not create report file")?;
-    serde_json::to_writer_pretty(&mut file, &report).context("Could not serialize report")?;
-    file.flush().context("Could not flush report")?;
+    let payload_json =
+        serde_json::to_string(&payload).context("Could not serialize completed traffic run")?;
+
+    Ok(SessionEntry {
+        id,
+        kind: "traffic_test".into(),
+        profile: config.profile.to_owned(),
+        target: config.target.to_owned(),
+        completed_at,
+        payload_json,
+    })
+}
+
+pub fn make_protection_session_entry(id: u64, report: &ReconReport) -> Result<SessionEntry> {
+    let payload_json =
+        serde_json::to_string(report).context("Could not serialize protection audit")?;
+    Ok(SessionEntry {
+        id,
+        kind: "protection_audit".into(),
+        profile: "Protection".into(),
+        target: report.target.clone(),
+        completed_at: report.generated_at.to_rfc3339(),
+        payload_json,
+    })
+}
+
+pub fn make_protection_error_entry(id: u64, target: &str, error: &str) -> Result<SessionEntry> {
+    #[derive(Serialize)]
+    struct FailedProtectionAudit<'a> {
+        status: &'static str,
+        target: &'a str,
+        error: &'a str,
+    }
+
+    let payload_json = serde_json::to_string(&FailedProtectionAudit {
+        status: "failed",
+        target,
+        error,
+    })
+    .context("Could not serialize failed protection audit")?;
+    Ok(SessionEntry {
+        id,
+        kind: "protection_audit".into(),
+        profile: "Protection".into(),
+        target: target.to_owned(),
+        completed_at: chrono::Utc::now().to_rfc3339(),
+        payload_json,
+    })
+}
+
+pub fn export_session_json(
+    path: &Path,
+    history: &SessionHistory,
+) -> Result<()> {
+    if history.is_empty() {
+        anyhow::bail!("There are no completed tests in the current session.");
+    }
+
+    let header = SessionHeader {
+        application: "RedPulse",
+        version: env!("CARGO_PKG_VERSION"),
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        storage: "volatile RAM session history",
+        automatic_persistence: false,
+        run_count: history.len(),
+        evicted_older_runs: history.evicted_runs(),
+        memory_limit_bytes: MAX_SESSION_MEMORY_BYTES,
+        run_limit: MAX_SESSION_RUNS,
+    };
+
+    let mut file = BufWriter::new(File::create(path).context("Could not create session report")?);
+    let mut header_json =
+        serde_json::to_vec(&header).context("Could not serialize session metadata")?;
+    header_json.pop(); // Replace the closing brace with the runs array.
+    file.write_all(&header_json)?;
+    file.write_all(b",\"runs\":[")?;
+
+    for (index, entry) in history.entries().iter().enumerate() {
+        if index > 0 {
+            file.write_all(b",")?;
+        }
+        let metadata = SessionRunMetadata {
+            id: entry.id,
+            kind: &entry.kind,
+            profile: &entry.profile,
+            target: &entry.target,
+            completed_at: &entry.completed_at,
+        };
+        let mut metadata_json =
+            serde_json::to_vec(&metadata).context("Could not serialize session run metadata")?;
+        metadata_json.pop();
+        file.write_all(&metadata_json)?;
+        file.write_all(b",\"data\":")?;
+        file.write_all(entry.payload_json.as_bytes())?;
+        file.write_all(b"}")?;
+    }
+
+    file.write_all(b"]}")?;
+    file.flush().context("Could not flush session report")?;
     Ok(())
 }
 
